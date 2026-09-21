@@ -1,0 +1,1266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+<meta name="theme-color" content="#0d3b24" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Lights Tracker" />
+<title>Christmas Lights — Job Tracker</title>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+<script>
+  window.fbAuth = null; window.fbDb = null;
+  try {
+    firebase.initializeApp({
+      apiKey: "AIzaSyB6ihNYWNiGEFdSc1amR3lp2sSmPVbvOAU",
+      authDomain: "chesapeake-prowash.firebaseapp.com",
+      projectId: "chesapeake-prowash",
+      storageBucket: "chesapeake-prowash.firebasestorage.app",
+      messagingSenderId: "99330916879",
+      appId: "1:99330916879:web:d7e900943291f11323d97a"
+    });
+    window.fbAuth = firebase.auth();
+    window.fbDb = firebase.firestore();
+  } catch (e) { console.warn('Firebase unavailable, running local-only', e); }
+</script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Oswald:wght@600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --pine:    #0d3b24;
+    --pine2:   #124f30;
+    --pine3:   #196b40;
+    --red:     #b0242a;
+    --red2:    #d13138;
+    --gold:    #d4a017;
+    --gold2:   #f0bc2a;
+    --white:   #ffffff;
+    --bg:      #f2f4f0;
+    --surface: #ffffff;
+    --border:  #d7dcd3;
+    --muted:   #52604f;
+    --text:    #142016;
+    --profit:  #136130;
+    --loss:    #a81515;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { -webkit-text-size-adjust: 100%; }
+  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  input, select, textarea, button { font-family: inherit; }
+  #root { max-width: 560px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; padding-bottom: 78px; }
+
+  /* Header */
+  .app-header {
+    background: var(--pine);
+    color: var(--white);
+    position: sticky; top: 0; z-index: 20;
+    border-bottom: 3px solid var(--gold);
+    box-shadow: 0 2px 12px rgba(0,0,0,.25);
+  }
+  .header-inner { display: flex; align-items: center; gap: 10px; padding: 14px 16px; }
+  .header-inner h1 { font-family: 'Oswald', sans-serif; font-size: 18px; letter-spacing: .3px; flex: 1; }
+  .header-inner .emoji { font-size: 22px; }
+  .sync-pill {
+    border: 1px solid rgba(255,255,255,.35); background: rgba(255,255,255,.1); color: var(--white);
+    border-radius: 999px; padding: 5px 10px; font-size: 11.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
+  }
+  .sync-pill.ok { border-color: #8fe3ab; color: #8fe3ab; }
+  .sync-pill.err { border-color: #ff9d9d; color: #ff9d9d; }
+  .btn-google {
+    display: flex; align-items: center; gap: 10px; background: var(--white); color: #3c4043;
+    border: 1.5px solid var(--border); border-radius: 10px; padding: 11px 16px; font-weight: 700; font-size: 14.5px; cursor: pointer;
+  }
+  .msg-err { color: var(--loss); font-size: 12.5px; margin-top: 8px; }
+
+  /* Bottom nav */
+  .tab-bar {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
+    max-width: 560px; margin: 0 auto;
+    display: flex; background: var(--pine);
+    border-top: 3px solid var(--gold);
+    box-shadow: 0 -2px 12px rgba(0,0,0,.25);
+  }
+  .tab-btn {
+    flex: 1; background: none; border: none; color: rgba(255,255,255,.65);
+    padding: 9px 2px 10px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 10.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+  }
+  .tab-btn .ic { font-size: 18px; }
+  .tab-btn.active { color: var(--gold2); }
+
+  main { flex: 1; padding: 14px 14px 6px; }
+
+  /* Generic */
+  .card {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
+    padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05);
+  }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .section-title {
+    font-family: 'Oswald', sans-serif; font-size: 14px; text-transform: uppercase;
+    letter-spacing: .5px; color: var(--pine); margin-bottom: 10px;
+  }
+  .btn {
+    border: none; border-radius: 10px; padding: 11px 16px; font-weight: 700; font-size: 14.5px;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  .btn-primary { background: var(--pine); color: var(--white); }
+  .btn-primary:active { background: var(--pine2); }
+  .btn-gold { background: var(--gold); color: var(--pine); }
+  .btn-red { background: var(--red); color: var(--white); }
+  .btn-ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+  .btn-block { width: 100%; }
+  .btn-sm { padding: 7px 11px; font-size: 13px; border-radius: 8px; }
+  .btn-icon { padding: 8px 10px; border-radius: 8px; }
+  .fab {
+    position: fixed; right: 18px; bottom: 92px; z-index: 25;
+    width: 54px; height: 54px; border-radius: 50%; background: var(--red);
+    color: var(--white); font-size: 26px; border: none; box-shadow: 0 4px 14px rgba(0,0,0,.35);
+    display: flex; align-items: center; justify-content: center; cursor: pointer;
+  }
+  .fab-wrap { max-width: 560px; margin: 0 auto; position: relative; }
+
+  label { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 12px 0 5px; }
+  label:first-child { margin-top: 0; }
+  input[type=text], input[type=number], select, textarea {
+    width: 100%; padding: 11px 12px; border: 1.5px solid var(--border); border-radius: 9px;
+    font-size: 16px; background: var(--white); color: var(--text);
+  }
+  input:focus, select:focus, textarea:focus { outline: 2px solid var(--pine3); outline-offset: 1px; }
+  .field-group { display: flex; gap: 10px; }
+  .field-group > div { flex: 1; }
+  .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+
+  .pill-group { display: flex; gap: 8px; }
+  .pill {
+    flex: 1; text-align: center; padding: 9px 6px; border-radius: 9px; border: 1.5px solid var(--border);
+    background: var(--white); font-weight: 600; font-size: 13.5px; cursor: pointer; color: var(--muted);
+  }
+  .pill.active { background: var(--pine); border-color: var(--pine); color: var(--white); }
+  .pill.active.gold { background: var(--gold); border-color: var(--gold); color: var(--pine); }
+
+  .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .badge-sched { background: #fdf0d5; color: #8a5a00; }
+  .badge-done { background: #e1f3e6; color: var(--profit); }
+
+  .empty-state { text-align: center; padding: 40px 16px; color: var(--muted); }
+  .empty-state .big { font-size: 40px; margin-bottom: 10px; }
+
+  /* Tech list */
+  .tech-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-bottom: 1px solid var(--border); }
+  .tech-row:last-child { border-bottom: none; }
+  .tech-name { font-weight: 700; }
+  .tech-meta { font-size: 12.5px; color: var(--muted); }
+  .icon-btn { background: none; border: none; font-size: 17px; cursor: pointer; padding: 6px; color: var(--muted); }
+  .icon-btn.danger { color: var(--red); }
+
+  /* Job card */
+  .job-card { cursor: pointer; }
+  .job-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+  .job-customer { font-weight: 800; font-size: 15.5px; }
+  .job-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
+  .job-metrics { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
+  .metric { }
+  .metric .lbl { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
+  .metric .val { font-weight: 800; font-size: 14.5px; }
+  .val.pos { color: var(--profit); }
+  .val.neg { color: var(--loss); }
+
+  /* Assignment builder */
+  .assign-item { border: 1.5px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
+  .assign-head { display: flex; align-items: center; justify-content: space-between; }
+  .assign-head .nm { font-weight: 700; font-size: 14px; }
+  .checkbox-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .checkbox-row:last-child { border-bottom: none; }
+  .checkbox-row input[type=checkbox] { width: 19px; height: 19px; accent-color: var(--pine); }
+  .checkbox-row .nm { font-weight: 700; flex: 1; }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed; inset: 0; background: rgba(10,20,15,.55); z-index: 50;
+    display: flex; align-items: flex-end; justify-content: center;
+  }
+  .modal {
+    background: var(--bg); width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto;
+    border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+  }
+  .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; position: sticky; top: 0; background: var(--bg); padding-top: 2px; }
+  .modal-head h2 { font-family: 'Oswald', sans-serif; font-size: 17px; color: var(--pine); }
+  .close-x { background: none; border: none; font-size: 22px; color: var(--muted); cursor: pointer; padding: 4px 8px; }
+
+  .summary-box {
+    background: var(--pine); color: var(--white); border-radius: 12px; padding: 12px 14px; margin-top: 14px;
+  }
+  .summary-box .row { padding: 3px 0; font-size: 13.5px; }
+  .summary-box .row.total { border-top: 1px solid rgba(255,255,255,.25); margin-top: 6px; padding-top: 8px; font-weight: 800; font-size: 15px; }
+  .summary-box .row .lab { color: rgba(255,255,255,.75); }
+  .summary-box .row.total .lab { color: var(--white); }
+
+  /* Dashboard */
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
+  .stat-card .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; font-weight: 700; }
+  .stat-card .val { font-size: 19px; font-weight: 800; margin-top: 4px; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; cursor: pointer; white-space: nowrap; }
+  th.sorted { color: var(--pine); }
+  td.num, th.num { text-align: right; }
+  .table-wrap { overflow-x: auto; }
+
+  canvas { max-width: 100%; }
+
+  select.sort-select { width: auto; display: inline-block; padding: 7px 10px; font-size: 13px; }
+
+  @media (min-width: 640px) {
+    .stat-grid { grid-template-columns: repeat(4, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useMemo } = React;
+
+const STORAGE_KEY = 'xmasLightsTracker_v1';
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+
+function loadData() {
+  const fallback = { techs: [], jobs: [], expenses: [], settings: { materialCostPerFt: 1.5 } };
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return { ...fallback, ...parsed, settings: { ...fallback.settings, ...(parsed.settings || {}) } };
+    }
+  } catch (e) {}
+  return fallback;
+}
+function saveData(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch (e) {}
+}
+
+// ---- Cloud sync (Google sign-in + Firestore), version-guarded against stale overwrites ----
+const FB_AUTH = window.fbAuth;
+const FB_DB = window.fbDb;
+const TS_KEY = 'xmasLightsUpdatedAt';
+const BACKUP_KEY = 'xmasLightsBackups';
+const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
+const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length;
+const userDoc = (uid) => FB_DB.collection('users').doc(uid).collection('data').doc('xmasLights');
+
+// One rolling snapshot per day (last 14). A smaller snapshot never replaces a bigger one from the same day.
+function autoBackup(data) {
+  if (recordCount(data) === 0) return;
+  const day = new Date().toDateString();
+  const all = lsGet(BACKUP_KEY, []);
+  const existing = all.find(b => b.day === day);
+  if (existing && recordCount(existing.data) > recordCount(data)) return;
+  const list = all.filter(b => b.day !== day);
+  list.push({ day, ts: Date.now(), data });
+  lsSet(BACKUP_KEY, list.slice(-14));
+}
+
+const fmtMoney = (n) => {
+  const v = Number(n) || 0;
+  return v.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
+};
+const fmtMoney2 = (n) => {
+  const v = Number(n) || 0;
+  return v.toLocaleString('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+const fmtPct = (n) => (Number.isFinite(n) ? (n * 100).toFixed(1) + '%' : '—');
+const fmtDate = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+const fmtDateOnly = (ymd) => {
+  if (!ymd) return '';
+  const [y, m, d] = ymd.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+const todayYMD = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+};
+const EXPENSE_CATEGORIES = ['Vehicle & Fuel', 'Equipment & Supplies', 'Insurance', 'Advertising', 'Storage', 'Other'];
+
+// ---- Core financial calculation for a single job ----
+function computeJobFinancials(job, settings) {
+  const feet = Number(job.feet) || 0;
+  const revenue = Number(job.revenue) || 0;
+  const misc = Number(job.miscCost) || 0;
+  const materialCost = feet * (Number(settings.materialCostPerFt) || 0);
+
+  const assignments = job.assignments || [];
+  const hourlyAssigns = assignments.filter(a => a.payType === 'hourly');
+  const perFootAssigns = assignments.filter(a => a.payType === 'perfoot');
+
+  const hourlyCost = hourlyAssigns.reduce((sum, a) => sum + (Number(a.hours) || 0) * (Number(a.rate) || 0), 0);
+
+  const avgPerFootRate = perFootAssigns.length
+    ? perFootAssigns.reduce((s, a) => s + (Number(a.rate) || 0), 0) / perFootAssigns.length
+    : 0;
+  const perFootPool = perFootAssigns.length ? feet * avgPerFootRate : 0;
+  const perFootEach = perFootAssigns.length ? perFootPool / perFootAssigns.length : 0;
+
+  const laborCost = hourlyCost + perFootPool;
+  const totalCost = materialCost + laborCost + misc;
+  const netProfit = revenue - totalCost;
+  const margin = revenue > 0 ? netProfit / revenue : 0;
+
+  const payByTech = {};
+  hourlyAssigns.forEach(a => { payByTech[a.techId] = (Number(a.hours) || 0) * (Number(a.rate) || 0); });
+  perFootAssigns.forEach(a => { payByTech[a.techId] = perFootEach; });
+
+  return { materialCost, hourlyCost, perFootPool, perFootEach, laborCost, totalCost, netProfit, margin, payByTech };
+}
+
+function techDefaultFor(tech) {
+  return { techId: tech.id, payType: tech.payType, rate: tech.rate, hours: '' };
+}
+
+// ================= App =================
+function App() {
+  const initial = useMemo(loadData, []);
+  const [techs, setTechs] = useState(initial.techs);
+  const [jobs, setJobs] = useState(initial.jobs);
+  const [expenses, setExpenses] = useState(initial.expenses);
+  const [settings, setSettings] = useState(initial.settings);
+  const [tab, setTab] = useState('jobs');
+
+  const [techModal, setTechModal] = useState(null); // null | {} | tech
+  const [jobModal, setJobModal] = useState(null); // null | {} | job
+  const [expenseModal, setExpenseModal] = useState(null); // null | {} | expense
+
+  // ---- Auth + sync ----
+  const [user, setUser] = useState(null);
+  const [syncState, setSyncState] = useState('synced'); // synced | saving | error
+  const [authError, setAuthError] = useState('');
+  const userRef = useRef(null);
+  const dataRef = useRef(null);
+  const snapshotUnsub = useRef(null);
+  const lastCloudJSON = useRef('');
+  const cloudReady = useRef(false);
+  const isSaving = useRef(false);
+  const retryTimer = useRef(null);
+  const firstRun = useRef(true);
+  const localUpdatedAt = useRef(Number(lsGet(TS_KEY, 0)) || 0);
+  userRef.current = user;
+  dataRef.current = { techs, jobs, expenses, settings };
+
+  const doCloudSave = (uid, contentJson, ts) => {
+    clearTimeout(retryTimer.current);
+    isSaving.current = true;
+    localUpdatedAt.current = ts;
+    lsSet(TS_KEY, ts);
+    setSyncState('saving');
+    try {
+      userDoc(uid).set({ ...JSON.parse(contentJson), updatedAt: ts })
+        .then(() => { lastCloudJSON.current = contentJson; isSaving.current = false; setSyncState('synced'); })
+        .catch((err) => {
+          console.warn('Cloud save failed', err);
+          isSaving.current = false;
+          setSyncState('error');
+          retryTimer.current = setTimeout(() => doCloudSave(uid, contentJson, ts), 8000);
+        });
+    } catch (e) { isSaving.current = false; setSyncState('error'); }
+  };
+
+  const subscribeToCloud = (uid) => {
+    if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; }
+    snapshotUnsub.current = userDoc(uid).onSnapshot(snapshot => {
+      cloudReady.current = true;
+      const local = dataRef.current;
+      if (snapshot.exists) {
+        const d = snapshot.data();
+        const incoming = {
+          techs: d.techs || [],
+          jobs: d.jobs || [],
+          expenses: d.expenses || [],
+          settings: { materialCostPerFt: 1.5, ...(d.settings || {}) },
+        };
+        const incomingJSON = JSON.stringify(incoming);
+        if (incomingJSON === lastCloudJSON.current) return;
+
+        // Only adopt the cloud copy if it is genuinely newer; a stale/emptier copy must never
+        // overwrite newer local data. In that case keep ours and re-push it to heal the cloud.
+        const cloudTs = Number(d.updatedAt) || 0;
+        const localTs = Number(localUpdatedAt.current) || 0;
+        const adopt = recordCount(local) === 0
+          || cloudTs > localTs
+          || (cloudTs === localTs && recordCount(incoming) >= recordCount(local));
+
+        if (adopt) {
+          lastCloudJSON.current = incomingJSON;
+          localUpdatedAt.current = cloudTs;
+          lsSet(TS_KEY, cloudTs);
+          setTechs(incoming.techs);
+          setJobs(incoming.jobs);
+          setExpenses(incoming.expenses);
+          setSettings(incoming.settings);
+        } else if (!isSaving.current) {
+          doCloudSave(uid, JSON.stringify(local), Math.max(localTs, cloudTs) + 1);
+        }
+      } else {
+        const ts = Math.max(Number(localUpdatedAt.current) || 0, Date.now());
+        doCloudSave(uid, JSON.stringify(local), ts);
+      }
+    }, (err) => {
+      console.warn('Cloud listen failed', err);
+      setSyncState('error');
+      if (err && err.code === 'permission-denied') setAuthError('Cloud sync was denied by Firestore security rules.');
+    });
+  };
+
+  useEffect(() => {
+    if (!FB_AUTH) return;
+    const unsub = FB_AUTH.onAuthStateChanged(u => {
+      setUser(u);
+      if (u) subscribeToCloud(u.uid);
+      else if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; cloudReady.current = false; }
+    });
+    return () => { unsub(); if (snapshotUnsub.current) snapshotUnsub.current(); };
+  }, []);
+
+  // Runs only when the data itself changes (not on sign-in), so a stale device is never
+  // mistaken for the newest copy just because someone signed in on it.
+  useEffect(() => {
+    const data = { techs, jobs, expenses, settings };
+    saveData(data);
+    const json = JSON.stringify(data);
+    if (json === lastCloudJSON.current) return;
+    autoBackup(data);
+    if (firstRun.current) { firstRun.current = false; return; }
+    const ts = Date.now();
+    if (!userRef.current || !cloudReady.current) {
+      localUpdatedAt.current = ts;
+      lsSet(TS_KEY, ts);
+      return;
+    }
+    doCloudSave(userRef.current.uid, json, ts);
+  }, [techs, jobs, expenses, settings]);
+
+  const signIn = () => {
+    setAuthError('');
+    if (!FB_AUTH) { setAuthError('Sync is unavailable right now (could not load Google sign-in). Check your connection.'); return; }
+    FB_AUTH.signInWithPopup(new firebase.auth.GoogleAuthProvider()).catch(err => {
+      setAuthError(err && err.code === 'auth/unauthorized-domain'
+        ? 'This web address is not authorized for Google sign-in yet.'
+        : 'Sign-in failed: ' + ((err && err.message) || 'unknown error'));
+    });
+  };
+  const signOut = () => {
+    FB_AUTH.signOut();
+    cloudReady.current = false;
+    clearTimeout(retryTimer.current);
+    if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; }
+  };
+
+  const importData = (d) => {
+    setTechs(Array.isArray(d.techs) ? d.techs : []);
+    setJobs(Array.isArray(d.jobs) ? d.jobs : []);
+    setExpenses(Array.isArray(d.expenses) ? d.expenses : []);
+    setSettings({ materialCostPerFt: 1.5, ...(d.settings || {}) });
+  };
+
+  const upsertTech = (t) => {
+    setTechs(prev => {
+      const exists = prev.some(x => x.id === t.id);
+      return exists ? prev.map(x => x.id === t.id ? t : x) : [...prev, t];
+    });
+  };
+  const deleteTech = (id) => {
+    setTechs(prev => prev.filter(t => t.id !== id));
+    setJobs(prev => prev.map(j => ({ ...j, assignments: (j.assignments || []).filter(a => a.techId !== id) })));
+  };
+
+  const upsertJob = (j) => {
+    setJobs(prev => {
+      const exists = prev.some(x => x.id === j.id);
+      return exists ? prev.map(x => x.id === j.id ? j : x) : [j, ...prev];
+    });
+  };
+  const deleteJob = (id) => setJobs(prev => prev.filter(j => j.id !== id));
+
+  const upsertExpense = (ex) => {
+    setExpenses(prev => {
+      const exists = prev.some(x => x.id === ex.id);
+      return exists ? prev.map(x => x.id === ex.id ? ex : x) : [ex, ...prev];
+    });
+  };
+  const deleteExpense = (id) => setExpenses(prev => prev.filter(e => e.id !== id));
+
+  return (
+    <React.Fragment>
+      <header className="app-header">
+        <div className="header-inner">
+          <span className="emoji">🎄</span>
+          <h1>Christmas Lights Job Tracker</h1>
+          <button className={"sync-pill" + (user && syncState === 'synced' ? ' ok' : '') + (syncState === 'error' ? ' err' : '')}
+            onClick={() => setTab('settings')}>
+            {!user ? '☁️ Sign in to sync' : syncState === 'saving' ? '☁️ Saving…' : syncState === 'error' ? '⚠️ Sync error' : '✓ Synced'}
+          </button>
+        </div>
+      </header>
+      <main>
+        {tab === 'jobs' && (
+          <JobsTab jobs={jobs} techs={techs} settings={settings}
+            onAdd={() => setJobModal({})}
+            onEdit={(j) => setJobModal(j)}
+            onDelete={deleteJob} />
+        )}
+        {tab === 'techs' && (
+          <TechsTab techs={techs}
+            onAdd={() => setTechModal({})}
+            onEdit={(t) => setTechModal(t)}
+            onDelete={deleteTech} />
+        )}
+        {tab === 'expenses' && (
+          <ExpensesTab expenses={expenses}
+            onAdd={() => setExpenseModal({})}
+            onEdit={(e) => setExpenseModal(e)}
+            onDelete={deleteExpense} />
+        )}
+        {tab === 'dashboard' && (
+          <DashboardTab jobs={jobs} techs={techs} expenses={expenses} settings={settings} />
+        )}
+        {tab === 'settings' && (
+          <SettingsTab settings={settings} setSettings={setSettings}
+            techs={techs} onAddTech={() => setTechModal({})}
+            onEditTech={(t) => setTechModal(t)} onDeleteTech={deleteTech}
+            jobs={jobs} onEditJob={(j) => setJobModal(j)} onDeleteJob={deleteJob}
+            expenses={expenses} onEditExpense={(e) => setExpenseModal(e)} onDeleteExpense={deleteExpense}
+            user={user} syncState={syncState} authError={authError} signIn={signIn} signOut={signOut} onImport={importData} />
+        )}
+      </main>
+
+      {tab === 'jobs' && (
+        <div className="fab-wrap"><button className="fab" onClick={() => setJobModal({})} aria-label="Add job">+</button></div>
+      )}
+      {tab === 'techs' && (
+        <div className="fab-wrap"><button className="fab" onClick={() => setTechModal({})} aria-label="Add tech">+</button></div>
+      )}
+      {tab === 'expenses' && (
+        <div className="fab-wrap"><button className="fab" onClick={() => setExpenseModal({})} aria-label="Add expense">+</button></div>
+      )}
+
+      <nav className="tab-bar">
+        <button className={"tab-btn" + (tab === 'jobs' ? ' active' : '')} onClick={() => setTab('jobs')}>
+          <span className="ic">🧾</span>Jobs
+        </button>
+        <button className={"tab-btn" + (tab === 'techs' ? ' active' : '')} onClick={() => setTab('techs')}>
+          <span className="ic">👷</span>Techs
+        </button>
+        <button className={"tab-btn" + (tab === 'expenses' ? ' active' : '')} onClick={() => setTab('expenses')}>
+          <span className="ic">💸</span>Expenses
+        </button>
+        <button className={"tab-btn" + (tab === 'dashboard' ? ' active' : '')} onClick={() => setTab('dashboard')}>
+          <span className="ic">📊</span>Dashboard
+        </button>
+        <button className={"tab-btn" + (tab === 'settings' ? ' active' : '')} onClick={() => setTab('settings')}>
+          <span className="ic">⚙️</span>Settings
+        </button>
+      </nav>
+
+      {techModal && (
+        <TechModal tech={techModal} onClose={() => setTechModal(null)}
+          onSave={(t) => { upsertTech(t); setTechModal(null); }} />
+      )}
+      {jobModal && (
+        <JobModal job={jobModal} techs={techs} settings={settings}
+          onClose={() => setJobModal(null)}
+          onSave={(j) => { upsertJob(j); setJobModal(null); }} />
+      )}
+      {expenseModal && (
+        <ExpenseModal expense={expenseModal} onClose={() => setExpenseModal(null)}
+          onSave={(e) => { upsertExpense(e); setExpenseModal(null); }} />
+      )}
+    </React.Fragment>
+  );
+}
+
+// ================= Techs =================
+function TechsTab({ techs, onAdd, onEdit, onDelete }) {
+  return (
+    <div>
+      <div className="card">
+        <div className="row" style={{ marginBottom: techs.length ? 8 : 0 }}>
+          <div className="section-title" style={{ marginBottom: 0 }}>Tech Roster</div>
+          <button className="btn btn-primary btn-sm" onClick={onAdd}>+ Add Tech</button>
+        </div>
+        {techs.length === 0 ? (
+          <div className="empty-state">
+            <div className="big">👷</div>
+            No techs yet. Add your crew to get started.
+          </div>
+        ) : techs.map(t => (
+          <div className="tech-row" key={t.id}>
+            <div>
+              <div className="tech-name">{t.name}</div>
+              <div className="tech-meta">
+                {t.payType === 'hourly' ? `Hourly · $${Number(t.rate).toFixed(2)}/hr` : `Per Foot · $${Number(t.rate).toFixed(2)}/ft`}
+              </div>
+            </div>
+            <div>
+              <button className="icon-btn" onClick={() => onEdit(t)}>✏️</button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Delete ${t.name}? This removes them from any jobs.`)) onDelete(t.id); }}>🗑️</button>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TechModal({ tech, onClose, onSave }) {
+  const isNew = !tech.id;
+  const [name, setName] = useState(tech.name || '');
+  const [payType, setPayType] = useState(tech.payType || 'hourly');
+  const [rate, setRate] = useState(tech.rate != null ? String(tech.rate) : '');
+
+  const save = () => {
+    if (!name.trim()) { alert('Enter a tech name.'); return; }
+    if (rate === '' || isNaN(Number(rate)) || Number(rate) < 0) { alert('Enter a valid rate.'); return; }
+    onSave({ id: tech.id || uid(), name: name.trim(), payType, rate: Number(rate) });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal">
+        <div className="modal-head">
+          <h2>{isNew ? 'Add Tech' : 'Edit Tech'}</h2>
+          <button className="close-x" onClick={onClose}>✕</button>
+        </div>
+
+        <label>Tech Name</label>
+        <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mike Johnson" autoFocus />
+
+        <label>Default Pay Type</label>
+        <div className="pill-group">
+          <div className={"pill" + (payType === 'hourly' ? ' active' : '')} onClick={() => setPayType('hourly')}>Hourly</div>
+          <div className={"pill" + (payType === 'perfoot' ? ' active' : '')} onClick={() => setPayType('perfoot')}>Per Foot</div>
+        </div>
+
+        <label>{payType === 'hourly' ? 'Default Rate ($/hr)' : 'Default Rate ($/ft)'}</label>
+        <input type="number" inputMode="decimal" min="0" step="0.01" value={rate} onChange={e => setRate(e.target.value)} placeholder="0.00" />
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" style={{ flex: 2 }} onClick={save}>Save Tech</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================= Jobs =================
+function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete }) {
+  const [sortKey, setSortKey] = useState('date');
+
+  const sorted = useMemo(() => {
+    const withCalc = jobs.map(j => ({ job: j, calc: computeJobFinancials(j, settings) }));
+    const cmp = {
+      date: (a, b) => new Date(b.job.date) - new Date(a.job.date),
+      profit: (a, b) => b.calc.netProfit - a.calc.netProfit,
+      margin: (a, b) => b.calc.margin - a.calc.margin,
+      revenue: (a, b) => (Number(b.job.revenue) || 0) - (Number(a.job.revenue) || 0),
+      feet: (a, b) => (Number(b.job.feet) || 0) - (Number(a.job.feet) || 0),
+    }[sortKey];
+    return withCalc.sort(cmp);
+  }, [jobs, settings, sortKey]);
+
+  return (
+    <div>
+      <div className="row" style={{ marginBottom: 10 }}>
+        <div className="section-title" style={{ marginBottom: 0 }}>Jobs ({jobs.length})</div>
+        <select className="sort-select" value={sortKey} onChange={e => setSortKey(e.target.value)}>
+          <option value="date">Newest</option>
+          <option value="profit">Profit</option>
+          <option value="margin">Margin %</option>
+          <option value="revenue">Revenue</option>
+          <option value="feet">Feet</option>
+        </select>
+      </div>
+
+      {jobs.length === 0 ? (
+        <div className="card"><div className="empty-state">
+          <div className="big">🎅</div>
+          No jobs yet. Tap + to add your first install.
+        </div></div>
+      ) : sorted.map(({ job, calc }) => (
+        <div className="card job-card" key={job.id} onClick={() => onEdit(job)}>
+          <div className="job-top">
+            <div>
+              <div className="job-customer">{job.customer || 'Untitled Job'}</div>
+              <div className="job-sub">{fmtDate(job.date)} · {Number(job.feet) || 0} ft</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span className={"badge " + (job.status === 'Completed' ? 'badge-done' : 'badge-sched')}>{job.status}</span>
+              <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete job for ${job.customer}?`)) onDelete(job.id); }}>🗑️</button>
+            </div>
+          </div>
+          <div className="job-metrics">
+            <div className="metric"><div className="lbl">Revenue</div><div className="val">{fmtMoney(job.revenue)}</div></div>
+            <div className="metric"><div className="lbl">Cost</div><div className="val">{fmtMoney(calc.totalCost)}</div></div>
+            <div className="metric"><div className="lbl">Profit</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtMoney(calc.netProfit)}</div></div>
+            <div className="metric"><div className="lbl">Margin</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtPct(calc.margin)}</div></div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function JobModal({ job, techs, settings, onClose, onSave }) {
+  const isNew = !job.id;
+  const [customer, setCustomer] = useState(job.customer || '');
+  const [feet, setFeet] = useState(job.feet != null ? String(job.feet) : '');
+  const [revenue, setRevenue] = useState(job.revenue != null ? String(job.revenue) : '');
+  const [status, setStatus] = useState(job.status || 'Scheduled');
+  const [miscCost, setMiscCost] = useState(job.miscCost != null ? String(job.miscCost) : '');
+  const [miscNote, setMiscNote] = useState(job.miscNote || '');
+  const [date] = useState(job.date || new Date().toISOString());
+  const [assignments, setAssignments] = useState(job.assignments || []);
+
+  const toggleTech = (tech, checked) => {
+    if (checked) {
+      setAssignments(prev => [...prev, techDefaultFor(tech)]);
+    } else {
+      setAssignments(prev => prev.filter(a => a.techId !== tech.id));
+    }
+  };
+  const updateAssign = (techId, patch) => {
+    setAssignments(prev => prev.map(a => a.techId === techId ? { ...a, ...patch } : a));
+  };
+
+  const previewJob = {
+    feet: Number(feet) || 0,
+    revenue: Number(revenue) || 0,
+    miscCost: Number(miscCost) || 0,
+    assignments,
+  };
+  const calc = computeJobFinancials(previewJob, settings);
+
+  const save = () => {
+    if (!customer.trim()) { alert('Enter a customer name.'); return; }
+    if (feet === '' || isNaN(Number(feet)) || Number(feet) < 0) { alert('Enter valid feet installed.'); return; }
+    if (revenue === '' || isNaN(Number(revenue)) || Number(revenue) < 0) { alert('Enter a valid revenue amount.'); return; }
+    for (const a of assignments) {
+      if (a.payType === 'hourly' && (a.hours === '' || isNaN(Number(a.hours)) || Number(a.hours) < 0)) {
+        alert('Enter valid hours for every hourly tech.'); return;
+      }
+      if (isNaN(Number(a.rate)) || Number(a.rate) < 0) {
+        alert('Enter a valid rate for every assigned tech.'); return;
+      }
+    }
+    onSave({
+      id: job.id || uid(),
+      customer: customer.trim(),
+      feet: Number(feet),
+      revenue: Number(revenue),
+      status,
+      miscCost: Number(miscCost) || 0,
+      miscNote: miscNote.trim(),
+      date,
+      assignments,
+    });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal">
+        <div className="modal-head">
+          <h2>{isNew ? 'New Job' : 'Edit Job'}</h2>
+          <button className="close-x" onClick={onClose}>✕</button>
+        </div>
+
+        <label>Customer Name</label>
+        <input type="text" value={customer} onChange={e => setCustomer(e.target.value)} placeholder="e.g. Smith Residence" autoFocus />
+
+        <div className="field-group">
+          <div>
+            <label>Feet Installed</label>
+            <input type="number" inputMode="decimal" min="0" step="1" value={feet} onChange={e => setFeet(e.target.value)} placeholder="0" />
+          </div>
+          <div>
+            <label>Job Revenue ($)</label>
+            <input type="number" inputMode="decimal" min="0" step="1" value={revenue} onChange={e => setRevenue(e.target.value)} placeholder="0" />
+          </div>
+        </div>
+
+        <label>Status</label>
+        <div className="pill-group">
+          <div className={"pill" + (status === 'Scheduled' ? ' active' : '')} onClick={() => setStatus('Scheduled')}>Scheduled</div>
+          <div className={"pill active gold" + (status === 'Completed' ? ' active' : '')} style={status !== 'Completed' ? { background: 'var(--white)', color: 'var(--muted)', borderColor: 'var(--border)' } : {}} onClick={() => setStatus('Completed')}>Completed</div>
+        </div>
+
+        <label style={{ marginTop: 16 }}>Techs Assigned</label>
+        <div className="card" style={{ margin: 0, padding: 10 }}>
+          {techs.length === 0 ? (
+            <div className="hint">No techs in your roster yet. Add techs from the Techs tab first.</div>
+          ) : techs.map(t => {
+            const a = assignments.find(x => x.techId === t.id);
+            return (
+              <React.Fragment key={t.id}>
+                <div className="checkbox-row">
+                  <input type="checkbox" checked={!!a} onChange={e => toggleTech(t, e.target.checked)} />
+                  <div className="nm">{t.name}</div>
+                  <div className="tech-meta">{t.payType === 'hourly' ? 'Hourly' : 'Per Foot'}</div>
+                </div>
+                {a && (
+                  <div className="assign-item">
+                    <div className="pill-group" style={{ marginBottom: 8 }}>
+                      <div className={"pill" + (a.payType === 'hourly' ? ' active' : '')} onClick={() => updateAssign(t.id, { payType: 'hourly' })}>Hourly</div>
+                      <div className={"pill" + (a.payType === 'perfoot' ? ' active' : '')} onClick={() => updateAssign(t.id, { payType: 'perfoot' })}>Per Foot</div>
+                    </div>
+                    <div className="field-group">
+                      {a.payType === 'hourly' && (
+                        <div>
+                          <label style={{ margin: '0 0 4px' }}>Hours Worked</label>
+                          <input type="number" inputMode="decimal" min="0" step="0.25" value={a.hours} onChange={e => updateAssign(t.id, { hours: e.target.value })} placeholder="0" />
+                        </div>
+                      )}
+                      <div>
+                        <label style={{ margin: '0 0 4px' }}>{a.payType === 'hourly' ? 'Rate ($/hr)' : 'Rate ($/ft)'}</label>
+                        <input type="number" inputMode="decimal" min="0" step="0.01" value={a.rate} onChange={e => updateAssign(t.id, { rate: e.target.value })} placeholder="0.00" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </React.Fragment>
+            );
+          })}
+        </div>
+
+        <label>Misc / Materials Cost ($)</label>
+        <input type="number" inputMode="decimal" min="0" step="0.01" value={miscCost} onChange={e => setMiscCost(e.target.value)} placeholder="0.00" />
+        <label>Note (optional)</label>
+        <input type="text" value={miscNote} onChange={e => setMiscNote(e.target.value)} placeholder="clips, timers, extension cords, gas..." />
+
+        <div className="summary-box">
+          <div className="row"><span className="lab">Material cost ({previewJob.feet} ft × ${Number(settings.materialCostPerFt).toFixed(2)})</span><span>{fmtMoney2(calc.materialCost)}</span></div>
+          <div className="row"><span className="lab">Hourly labor</span><span>{fmtMoney2(calc.hourlyCost)}</span></div>
+          <div className="row"><span className="lab">Per-foot labor pool</span><span>{fmtMoney2(calc.perFootPool)}</span></div>
+          <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
+          <div className="row total"><span className="lab">Total cost</span><span>{fmtMoney2(calc.totalCost)}</span></div>
+          <div className="row total"><span className="lab">Net profit</span><span>{fmtMoney2(calc.netProfit)}</span></div>
+          <div className="row"><span className="lab">Margin</span><span>{fmtPct(calc.margin)}</span></div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" style={{ flex: 2 }} onClick={save}>Save Job</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================= Expenses =================
+function ExpensesTab({ expenses, onAdd, onEdit, onDelete }) {
+  const sorted = useMemo(() => [...expenses].sort((a, b) => (b.date || '').localeCompare(a.date || '')), [expenses]);
+  const total = useMemo(() => expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0), [expenses]);
+
+  return (
+    <div>
+      <div className="row" style={{ marginBottom: 10 }}>
+        <div className="section-title" style={{ marginBottom: 0 }}>Business Expenses ({expenses.length})</div>
+        <div style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtMoney(total)}</div>
+      </div>
+
+      {expenses.length === 0 ? (
+        <div className="card"><div className="empty-state">
+          <div className="big">💸</div>
+          No expenses logged yet. Track overhead like insurance, fuel, and advertising here so your dashboard reflects true profit.
+        </div></div>
+      ) : sorted.map(ex => (
+        <div className="card job-card" key={ex.id} onClick={() => onEdit(ex)}>
+          <div className="job-top">
+            <div>
+              <div className="job-customer">{ex.description || ex.category}</div>
+              <div className="job-sub">{fmtDateOnly(ex.date)} · {ex.category}</div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ fontWeight: 800 }}>{fmtMoney2(ex.amount)}</div>
+              <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete this expense?`)) onDelete(ex.id); }}>🗑️</button>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ExpenseModal({ expense, onClose, onSave }) {
+  const isNew = !expense.id;
+  const [date, setDate] = useState(expense.date || todayYMD());
+  const [category, setCategory] = useState(expense.category || EXPENSE_CATEGORIES[0]);
+  const [description, setDescription] = useState(expense.description || '');
+  const [amount, setAmount] = useState(expense.amount != null ? String(expense.amount) : '');
+
+  const save = () => {
+    if (!date) { alert('Pick a date.'); return; }
+    if (amount === '' || isNaN(Number(amount)) || Number(amount) < 0) { alert('Enter a valid amount.'); return; }
+    onSave({ id: expense.id || uid(), date, category, description: description.trim(), amount: Number(amount) });
+  };
+
+  return (
+    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="modal">
+        <div className="modal-head">
+          <h2>{isNew ? 'Add Expense' : 'Edit Expense'}</h2>
+          <button className="close-x" onClick={onClose}>✕</button>
+        </div>
+
+        <label>Date</label>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} autoFocus />
+
+        <label>Category</label>
+        <select value={category} onChange={e => setCategory(e.target.value)}>
+          {EXPENSE_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+        </select>
+
+        <label>Description (optional)</label>
+        <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="e.g. Truck insurance premium" />
+
+        <label>Amount ($)</label>
+        <input type="number" inputMode="decimal" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
+
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary" style={{ flex: 2 }} onClick={save}>Save Expense</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ================= Dashboard =================
+function DashboardTab({ jobs, techs, expenses, settings }) {
+  const [sortKey, setSortKey] = useState('profit');
+  const [sortDir, setSortDir] = useState('desc');
+  const barRef = useRef(null);
+  const lineRef = useRef(null);
+  const barChart = useRef(null);
+  const lineChart = useRef(null);
+
+  const calcs = useMemo(() => jobs.map(j => ({ job: j, calc: computeJobFinancials(j, settings) })), [jobs, settings]);
+
+  const totals = useMemo(() => {
+    const revenue = calcs.reduce((s, c) => s + (Number(c.job.revenue) || 0), 0);
+    const cost = calcs.reduce((s, c) => s + c.calc.totalCost, 0);
+    const profit = revenue - cost;
+    const margins = calcs.filter(c => c.job.revenue > 0).map(c => c.calc.margin);
+    const avgMargin = margins.length ? margins.reduce((s, m) => s + m, 0) / margins.length : 0;
+    const expensesTotal = expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+    const trueProfit = profit - expensesTotal;
+    return { revenue, cost, profit, avgMargin, expensesTotal, trueProfit };
+  }, [calcs, expenses]);
+
+  const sortedJobs = useMemo(() => {
+    const arr = [...calcs];
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const val = (c) => ({
+      customer: c.job.customer.toLowerCase(),
+      revenue: Number(c.job.revenue) || 0,
+      feet: Number(c.job.feet) || 0,
+      cost: c.calc.totalCost,
+      profit: c.calc.netProfit,
+      margin: c.calc.margin,
+    }[sortKey]);
+    arr.sort((a, b) => {
+      const va = val(a), vb = val(b);
+      if (va < vb) return -1 * dir;
+      if (va > vb) return 1 * dir;
+      return 0;
+    });
+    return arr;
+  }, [calcs, sortKey, sortDir]);
+
+  const toggleSort = (key) => {
+    if (sortKey === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortKey(key); setSortDir('desc'); }
+  };
+
+  const perTech = useMemo(() => {
+    return techs.map(t => {
+      let hours = 0, feet = 0, pay = 0, jobCount = 0;
+      calcs.forEach(({ job, calc }) => {
+        const a = (job.assignments || []).find(x => x.techId === t.id);
+        if (!a) return;
+        jobCount += 1;
+        pay += calc.payByTech[t.id] || 0;
+        if (a.payType === 'hourly') hours += Number(a.hours) || 0;
+        else feet += Number(job.feet) || 0;
+      });
+      return { tech: t, hours, feet, pay, jobCount };
+    });
+  }, [techs, calcs]);
+
+  useEffect(() => {
+    if (!window.Chart) return;
+    const chronological = [...calcs].sort((a, b) => new Date(a.job.date) - new Date(b.job.date));
+
+    if (barChart.current) barChart.current.destroy();
+    if (barRef.current) {
+      barChart.current = new Chart(barRef.current, {
+        type: 'bar',
+        data: {
+          labels: chronological.map(c => c.job.customer || 'Job'),
+          datasets: [{
+            label: 'Profit',
+            data: chronological.map(c => c.calc.netProfit),
+            backgroundColor: chronological.map(c => c.calc.netProfit >= 0 ? '#196b40' : '#b0242a'),
+            borderRadius: 4,
+          }],
+        },
+        options: {
+          plugins: { legend: { display: false } },
+          scales: { y: { ticks: { callback: v => '$' + v } } },
+        },
+      });
+    }
+
+    if (lineChart.current) lineChart.current.destroy();
+    if (lineRef.current) {
+      lineChart.current = new Chart(lineRef.current, {
+        type: 'line',
+        data: {
+          labels: chronological.map(c => fmtDate(c.job.date)),
+          datasets: [
+            { label: 'Revenue', data: chronological.map(c => Number(c.job.revenue) || 0), borderColor: '#d4a017', backgroundColor: 'rgba(212,160,23,.15)', tension: .3, fill: true },
+            { label: 'Cost', data: chronological.map(c => c.calc.totalCost), borderColor: '#b0242a', backgroundColor: 'rgba(176,36,42,.12)', tension: .3, fill: true },
+          ],
+        },
+        options: {
+          plugins: { legend: { position: 'bottom' } },
+          scales: { y: { ticks: { callback: v => '$' + v } } },
+        },
+      });
+    }
+    return () => { if (barChart.current) barChart.current.destroy(); if (lineChart.current) lineChart.current.destroy(); };
+  }, [calcs]);
+
+  const sortArrow = (key) => sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
+
+  return (
+    <div>
+      <div className="section-title">Overview</div>
+      <div className="stat-grid" style={{ marginBottom: 14 }}>
+        <div className="stat-card"><div className="lbl">Total Revenue</div><div className="val">{fmtMoney(totals.revenue)}</div></div>
+        <div className="stat-card"><div className="lbl">Total Cost</div><div className="val">{fmtMoney(totals.cost)}</div></div>
+        <div className="stat-card"><div className="lbl">Net Profit</div><div className="val" style={{ color: totals.profit >= 0 ? 'var(--profit)' : 'var(--loss)' }}>{fmtMoney(totals.profit)}</div></div>
+        <div className="stat-card"><div className="lbl">Avg Margin</div><div className="val">{fmtPct(totals.avgMargin)}</div></div>
+      </div>
+
+      <div className="summary-box" style={{ marginTop: 0, marginBottom: 14 }}>
+        <div className="row"><span className="lab">Job profit (revenue − job costs)</span><span>{fmtMoney2(totals.profit)}</span></div>
+        <div className="row"><span className="lab">Business expenses</span><span>−{fmtMoney2(totals.expensesTotal)}</span></div>
+        <div className="row total"><span className="lab">True Net Profit</span><span style={{ color: totals.trueProfit >= 0 ? '#8fe3ab' : '#ff9d9d' }}>{fmtMoney2(totals.trueProfit)}</span></div>
+      </div>
+
+      {jobs.length === 0 ? (
+        <div className="card"><div className="empty-state"><div className="big">📊</div>Add some jobs to see your dashboard.</div></div>
+      ) : (
+        <React.Fragment>
+          <div className="card">
+            <div className="section-title">Job Profitability</div>
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th className={sortKey === 'customer' ? 'sorted' : ''} onClick={() => toggleSort('customer')}>Customer{sortArrow('customer')}</th>
+                    <th className={"num" + (sortKey === 'feet' ? ' sorted' : '')} onClick={() => toggleSort('feet')}>Feet{sortArrow('feet')}</th>
+                    <th className={"num" + (sortKey === 'revenue' ? ' sorted' : '')} onClick={() => toggleSort('revenue')}>Rev{sortArrow('revenue')}</th>
+                    <th className={"num" + (sortKey === 'profit' ? ' sorted' : '')} onClick={() => toggleSort('profit')}>Profit{sortArrow('profit')}</th>
+                    <th className={"num" + (sortKey === 'margin' ? ' sorted' : '')} onClick={() => toggleSort('margin')}>Margin{sortArrow('margin')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedJobs.map(({ job, calc }) => (
+                    <tr key={job.id}>
+                      <td>{job.customer}</td>
+                      <td className="num">{Number(job.feet) || 0}</td>
+                      <td className="num">{fmtMoney(job.revenue)}</td>
+                      <td className="num" style={{ color: calc.netProfit >= 0 ? 'var(--profit)' : 'var(--loss)', fontWeight: 700 }}>{fmtMoney(calc.netProfit)}</td>
+                      <td className="num">{fmtPct(calc.margin)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title">Per-Tech Breakdown</div>
+            {perTech.length === 0 ? <div className="hint">No techs yet.</div> : (
+              <div className="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Tech</th><th className="num">Hours</th><th className="num">Feet</th><th className="num">Jobs</th><th className="num">Total Pay</th></tr>
+                  </thead>
+                  <tbody>
+                    {perTech.map(pt => (
+                      <tr key={pt.tech.id}>
+                        <td>{pt.tech.name}</td>
+                        <td className="num">{pt.hours ? pt.hours.toFixed(2) : '—'}</td>
+                        <td className="num">{pt.feet ? pt.feet : '—'}</td>
+                        <td className="num">{pt.jobCount}</td>
+                        <td className="num" style={{ fontWeight: 700 }}>{fmtMoney(pt.pay)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="section-title">Profit per Job</div>
+            <canvas ref={barRef} height="180"></canvas>
+          </div>
+          <div className="card">
+            <div className="section-title">Revenue vs Cost Over Time</div>
+            <canvas ref={lineRef} height="180"></canvas>
+          </div>
+        </React.Fragment>
+      )}
+    </div>
+  );
+}
+
+// ================= Settings =================
+function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, user, syncState, authError, signIn, signOut, onImport }) {
+  const [rateStr, setRateStr] = useState(String(settings.materialCostPerFt));
+  const backups = lsGet(BACKUP_KEY, []).slice().reverse();
+
+  const saveRate = () => {
+    const v = Number(rateStr);
+    if (isNaN(v) || v < 0) { alert('Enter a valid rate.'); setRateStr(String(settings.materialCostPerFt)); return; }
+    setSettings(s => ({ ...s, materialCostPerFt: v }));
+  };
+
+  return (
+    <div>
+      <div className="card">
+        <div className="section-title">Google Sync</div>
+        {user ? (
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+              {user.photoURL && <img src={user.photoURL} alt="" style={{ width: 40, height: 40, borderRadius: '50%', border: '2px solid var(--gold)' }} />}
+              <div>
+                <div className="tech-name">{user.displayName}</div>
+                <div className="tech-meta">{user.email}</div>
+              </div>
+            </div>
+            <div className="hint" style={{ marginBottom: 10 }}>
+              {syncState === 'error' ? '⚠️ Could not reach the cloud. Your data is safe on this device and will retry automatically.' : '✅ Your data syncs automatically across all devices signed in with this account.'}
+            </div>
+            <button className="btn btn-ghost btn-block" onClick={signOut}>Sign Out</button>
+          </div>
+        ) : (
+          <div>
+            <div className="hint" style={{ marginBottom: 10 }}>Sign in with Google to sync your data between your phone and computer automatically.</div>
+            <button className="btn-google" style={{ width: '100%', justifyContent: 'center' }} onClick={signIn}>
+              <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+              Sign in with Google
+            </button>
+          </div>
+        )}
+        {authError && <div className="msg-err">{authError}</div>}
+      </div>
+
+      <div className="card">
+        <div className="section-title">Material Cost</div>
+        <label>Material Cost per Foot ($/ft)</label>
+        <div className="field-group">
+          <input type="number" inputMode="decimal" min="0" step="0.01" value={rateStr}
+            onChange={e => setRateStr(e.target.value)} onBlur={saveRate} />
+          <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveRate}>Save</button>
+        </div>
+        <div className="hint">Applied automatically to every job as feet installed × this rate.</div>
+      </div>
+
+      <div className="card">
+        <div className="row" style={{ marginBottom: techs.length ? 8 : 0 }}>
+          <div className="section-title" style={{ marginBottom: 0 }}>Tech Roster</div>
+          <button className="btn btn-primary btn-sm" onClick={onAddTech}>+ Add</button>
+        </div>
+        {techs.length === 0 ? <div className="hint">No techs yet.</div> : techs.map(t => (
+          <div className="tech-row" key={t.id}>
+            <div>
+              <div className="tech-name">{t.name}</div>
+              <div className="tech-meta">{t.payType === 'hourly' ? `Hourly · $${Number(t.rate).toFixed(2)}/hr` : `Per Foot · $${Number(t.rate).toFixed(2)}/ft`}</div>
+            </div>
+            <div>
+              <button className="icon-btn" onClick={() => onEditTech(t)}>✏️</button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Delete ${t.name}?`)) onDeleteTech(t.id); }}>🗑️</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="section-title">All Jobs ({jobs.length})</div>
+        {jobs.length === 0 ? <div className="hint">No jobs yet.</div> : jobs.map(j => (
+          <div className="tech-row" key={j.id}>
+            <div>
+              <div className="tech-name">{j.customer}</div>
+              <div className="tech-meta">{fmtDate(j.date)} · {j.status}</div>
+            </div>
+            <div>
+              <button className="icon-btn" onClick={() => onEditJob(j)}>✏️</button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Delete job for ${j.customer}?`)) onDeleteJob(j.id); }}>🗑️</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="section-title">All Expenses ({expenses.length})</div>
+        {expenses.length === 0 ? <div className="hint">No expenses yet.</div> : expenses.map(ex => (
+          <div className="tech-row" key={ex.id}>
+            <div>
+              <div className="tech-name">{ex.description || ex.category}</div>
+              <div className="tech-meta">{fmtDateOnly(ex.date)} · {ex.category} · {fmtMoney2(ex.amount)}</div>
+            </div>
+            <div>
+              <button className="icon-btn" onClick={() => onEditExpense(ex)}>✏️</button>
+              <button className="icon-btn danger" onClick={() => { if (confirm('Delete this expense?')) onDeleteExpense(ex.id); }}>🗑️</button>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card">
+        <div className="section-title">Automatic Backups</div>
+        <div className="hint" style={{ marginBottom: 6 }}>A snapshot of your data is saved on this device once a day (last 14 days).</div>
+        {backups.length === 0 ? <div className="hint">No backups yet.</div> : backups.map(b => (
+          <div className="tech-row" key={b.day}>
+            <div>
+              <div className="tech-name">{fmtDate(b.ts)}</div>
+              <div className="tech-meta">{(b.data.techs || []).length} techs · {(b.data.jobs || []).length} jobs · {(b.data.expenses || []).length} expenses</div>
+            </div>
+            <button className="btn btn-ghost btn-sm" onClick={() => { if (confirm('Restore this backup? It REPLACES all current data on every synced device.')) onImport(b.data); }}>Restore</button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
