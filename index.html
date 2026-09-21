@@ -150,6 +150,28 @@
   .badge-sched { background: #fdf0d5; color: #8a5a00; }
   .badge-done { background: #e1f3e6; color: var(--profit); }
 
+  /* Filter chips */
+  .filter-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 10px; }
+  .chip {
+    flex: 0 0 auto; padding: 7px 12px; border-radius: 999px; border: 1.5px solid var(--border);
+    background: var(--white); font-size: 12.5px; font-weight: 700; color: var(--muted);
+    cursor: pointer; white-space: nowrap;
+  }
+  .chip.active { background: var(--pine); border-color: var(--pine); color: var(--white); }
+
+  /* Deposit / balance toggles */
+  .pay-row { display: flex; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+  .pay-btn {
+    flex: 1; padding: 8px 6px; border-radius: 9px; border: 1.5px dashed var(--border);
+    background: var(--white); font-size: 11.5px; font-weight: 700; color: var(--muted); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1.3; text-align: center;
+  }
+  .pay-btn .amt { font-size: 13.5px; }
+  .pay-btn.paid { border-style: solid; border-color: var(--profit); background: #e1f3e6; color: var(--profit); }
+
+  .badge-paid { background: #e1f3e6; color: var(--profit); }
+  .badge-owed { background: #fde8e8; color: var(--loss); }
+
   .empty-state { text-align: center; padding: 40px 16px; color: var(--muted); }
   .empty-state .big { font-size: 40px; margin-bottom: 10px; }
 
@@ -326,6 +348,17 @@ function computeJobFinancials(job, settings) {
   return { materialCost, hourlyCost, perFootPool, perFootEach, laborCost, totalCost, netProfit, margin, payByTech };
 }
 
+// ---- Deposit / balance tracking (deposit is half the job revenue) ----
+function jobPayments(job) {
+  const revenue = Number(job.revenue) || 0;
+  const deposit = revenue * 0.5;
+  const balance = revenue - deposit;
+  const collected = (job.depositPaid ? deposit : 0) + (job.balancePaid ? balance : 0);
+  return { revenue, deposit, balance, collected, outstanding: revenue - collected, fullyPaid: revenue > 0 && !!job.depositPaid && !!job.balancePaid };
+}
+// Jobs saved before scheduling existed fall back to the date they were created.
+const scheduledOf = (job) => job.scheduledDate || (job.date ? job.date.slice(0, 10) : '');
+
 function techDefaultFor(tech) {
   return { techId: tech.id, payType: tech.payType, rate: tech.rate, hours: '' };
 }
@@ -492,6 +525,7 @@ function App() {
     });
   };
   const deleteJob = (id) => setJobs(prev => prev.filter(j => j.id !== id));
+  const togglePay = (id, field) => setJobs(prev => prev.map(j => j.id === id ? { ...j, [field]: !j[field] } : j));
 
   const upsertExpense = (ex) => {
     setExpenses(prev => {
@@ -506,7 +540,7 @@ function App() {
       <header className="app-header">
         <div className="header-inner">
           <span className="emoji">🎄</span>
-          <h1>Christmas Lights Job Tracker</h1>
+          <h1>Christmas Lights</h1>
           <button className={"sync-pill" + (user && syncState === 'synced' ? ' ok' : '') + (syncState === 'error' ? ' err' : '')}
             onClick={() => setTab('settings')}>
             {!user ? '☁️ Sign in to sync' : syncState === 'saving' ? '☁️ Saving…' : syncState === 'error' ? '⚠️ Sync error' : '✓ Synced'}
@@ -518,7 +552,7 @@ function App() {
           <JobsTab jobs={jobs} techs={techs} settings={settings}
             onAdd={() => setJobModal({})}
             onEdit={(j) => setJobModal(j)}
-            onDelete={deleteJob} />
+            onDelete={deleteJob} onTogglePay={togglePay} />
         )}
         {tab === 'techs' && (
           <TechsTab techs={techs}
@@ -665,12 +699,24 @@ function TechModal({ tech, onClose, onSave }) {
 }
 
 // ================= Jobs =================
-function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete }) {
-  const [sortKey, setSortKey] = useState('date');
+const JOB_FILTERS = [
+  { id: 'all', label: 'All', test: () => true },
+  { id: 'scheduled', label: 'Scheduled', test: (j) => j.status === 'Scheduled' },
+  { id: 'completed', label: 'Completed', test: (j) => j.status === 'Completed' },
+  { id: 'unpaid', label: 'Money Owed', test: (j) => jobPayments(j).outstanding > 0 },
+  { id: 'paid', label: 'Paid in Full', test: (j) => jobPayments(j).fullyPaid },
+];
 
-  const sorted = useMemo(() => {
-    const withCalc = jobs.map(j => ({ job: j, calc: computeJobFinancials(j, settings) }));
+function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onTogglePay }) {
+  const [filter, setFilter] = useState('all');
+  // Scheduled work reads best soonest-first; everything else newest/highest-first.
+  const [sortKey, setSortKey] = useState('scheduled');
+
+  const visible = useMemo(() => {
+    const test = (JOB_FILTERS.find(f => f.id === filter) || JOB_FILTERS[0]).test;
+    const withCalc = jobs.filter(test).map(j => ({ job: j, calc: computeJobFinancials(j, settings) }));
     const cmp = {
+      scheduled: (a, b) => scheduledOf(a.job).localeCompare(scheduledOf(b.job)),
       date: (a, b) => new Date(b.job.date) - new Date(a.job.date),
       profit: (a, b) => b.calc.netProfit - a.calc.netProfit,
       margin: (a, b) => b.calc.margin - a.calc.margin,
@@ -678,14 +724,20 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete }) {
       feet: (a, b) => (Number(b.job.feet) || 0) - (Number(a.job.feet) || 0),
     }[sortKey];
     return withCalc.sort(cmp);
-  }, [jobs, settings, sortKey]);
+  }, [jobs, settings, sortKey, filter]);
+
+  const owedTotal = useMemo(
+    () => visible.reduce((s, { job }) => s + jobPayments(job).outstanding, 0),
+    [visible]
+  );
 
   return (
     <div>
       <div className="row" style={{ marginBottom: 10 }}>
-        <div className="section-title" style={{ marginBottom: 0 }}>Jobs ({jobs.length})</div>
+        <div className="section-title" style={{ marginBottom: 0 }}>Jobs ({visible.length})</div>
         <select className="sort-select" value={sortKey} onChange={e => setSortKey(e.target.value)}>
-          <option value="date">Newest</option>
+          <option value="scheduled">Scheduled date</option>
+          <option value="date">Newest added</option>
           <option value="profit">Profit</option>
           <option value="margin">Margin %</option>
           <option value="revenue">Revenue</option>
@@ -693,31 +745,68 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete }) {
         </select>
       </div>
 
+      <div className="filter-bar">
+        {JOB_FILTERS.map(f => (
+          <div key={f.id} className={"chip" + (filter === f.id ? ' active' : '')} onClick={() => setFilter(f.id)}>
+            {f.label} ({jobs.filter(f.test).length})
+          </div>
+        ))}
+      </div>
+
+      {filter === 'unpaid' && visible.length > 0 && (
+        <div className="card" style={{ padding: '10px 14px' }}>
+          <div className="row">
+            <span style={{ fontWeight: 700, fontSize: 13.5 }}>Total outstanding</span>
+            <span style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtMoney2(owedTotal)}</span>
+          </div>
+        </div>
+      )}
+
       {jobs.length === 0 ? (
         <div className="card"><div className="empty-state">
           <div className="big">🎅</div>
           No jobs yet. Tap + to add your first install.
         </div></div>
-      ) : sorted.map(({ job, calc }) => (
-        <div className="card job-card" key={job.id} onClick={() => onEdit(job)}>
-          <div className="job-top">
-            <div>
-              <div className="job-customer">{job.customer || 'Untitled Job'}</div>
-              <div className="job-sub">{fmtDate(job.date)} · {Number(job.feet) || 0} ft</div>
+      ) : visible.length === 0 ? (
+        <div className="card"><div className="empty-state">
+          <div className="big">🔍</div>
+          No jobs match this filter.
+        </div></div>
+      ) : visible.map(({ job, calc }) => {
+        const pay = jobPayments(job);
+        return (
+          <div className="card job-card" key={job.id} onClick={() => onEdit(job)}>
+            <div className="job-top">
+              <div>
+                <div className="job-customer">{job.customer || 'Untitled Job'}</div>
+                <div className="job-sub">📅 {fmtDateOnly(scheduledOf(job)) || 'No date'} · {Number(job.feet) || 0} ft</div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span className={"badge " + (job.status === 'Completed' ? 'badge-done' : 'badge-sched')}>{job.status}</span>
+                <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete job for ${job.customer}?`)) onDelete(job.id); }}>🗑️</button>
+              </div>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className={"badge " + (job.status === 'Completed' ? 'badge-done' : 'badge-sched')}>{job.status}</span>
-              <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete job for ${job.customer}?`)) onDelete(job.id); }}>🗑️</button>
+            <div className="job-metrics">
+              <div className="metric"><div className="lbl">Revenue</div><div className="val">{fmtMoney(job.revenue)}</div></div>
+              <div className="metric"><div className="lbl">Cost</div><div className="val">{fmtMoney(calc.totalCost)}</div></div>
+              <div className="metric"><div className="lbl">Profit</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtMoney(calc.netProfit)}</div></div>
+              <div className="metric"><div className="lbl">Margin</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtPct(calc.margin)}</div></div>
+            </div>
+            <div className="pay-row">
+              <div className={"pay-btn" + (job.depositPaid ? ' paid' : '')}
+                onClick={(e) => { e.stopPropagation(); onTogglePay(job.id, 'depositPaid'); }}>
+                <span>{job.depositPaid ? '✓ Deposit paid' : 'Deposit 50%'}</span>
+                <span className="amt">{fmtMoney(pay.deposit)}</span>
+              </div>
+              <div className={"pay-btn" + (job.balancePaid ? ' paid' : '')}
+                onClick={(e) => { e.stopPropagation(); onTogglePay(job.id, 'balancePaid'); }}>
+                <span>{job.balancePaid ? '✓ Balance paid' : 'Balance due'}</span>
+                <span className="amt">{fmtMoney(pay.balance)}</span>
+              </div>
             </div>
           </div>
-          <div className="job-metrics">
-            <div className="metric"><div className="lbl">Revenue</div><div className="val">{fmtMoney(job.revenue)}</div></div>
-            <div className="metric"><div className="lbl">Cost</div><div className="val">{fmtMoney(calc.totalCost)}</div></div>
-            <div className="metric"><div className="lbl">Profit</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtMoney(calc.netProfit)}</div></div>
-            <div className="metric"><div className="lbl">Margin</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtPct(calc.margin)}</div></div>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -731,6 +820,9 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
   const [miscCost, setMiscCost] = useState(job.miscCost != null ? String(job.miscCost) : '');
   const [miscNote, setMiscNote] = useState(job.miscNote || '');
   const [date] = useState(job.date || new Date().toISOString());
+  const [scheduledDate, setScheduledDate] = useState(job.scheduledDate || (job.date ? job.date.slice(0, 10) : todayYMD()));
+  const [depositPaid, setDepositPaid] = useState(!!job.depositPaid);
+  const [balancePaid, setBalancePaid] = useState(!!job.balancePaid);
   const [assignments, setAssignments] = useState(job.assignments || []);
 
   const toggleTech = (tech, checked) => {
@@ -770,6 +862,9 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
       feet: Number(feet),
       revenue: Number(revenue),
       status,
+      scheduledDate,
+      depositPaid,
+      balancePaid,
       miscCost: Number(miscCost) || 0,
       miscNote: miscNote.trim(),
       date,
@@ -788,6 +883,9 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
         <label>Customer Name</label>
         <input type="text" value={customer} onChange={e => setCustomer(e.target.value)} placeholder="e.g. Smith Residence" autoFocus />
 
+        <label>Scheduled For</label>
+        <input type="date" value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} />
+
         <div className="field-group">
           <div>
             <label>Feet Installed</label>
@@ -803,6 +901,18 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
         <div className="pill-group">
           <div className={"pill" + (status === 'Scheduled' ? ' active' : '')} onClick={() => setStatus('Scheduled')}>Scheduled</div>
           <div className={"pill active gold" + (status === 'Completed' ? ' active' : '')} style={status !== 'Completed' ? { background: 'var(--white)', color: 'var(--muted)', borderColor: 'var(--border)' } : {}} onClick={() => setStatus('Completed')}>Completed</div>
+        </div>
+
+        <label style={{ marginTop: 16 }}>Payment</label>
+        <div className="pay-row" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
+          <div className={"pay-btn" + (depositPaid ? ' paid' : '')} onClick={() => setDepositPaid(p => !p)}>
+            <span>{depositPaid ? '✓ Deposit paid' : 'Deposit 50%'}</span>
+            <span className="amt">{fmtMoney2((Number(revenue) || 0) * 0.5)}</span>
+          </div>
+          <div className={"pay-btn" + (balancePaid ? ' paid' : '')} onClick={() => setBalancePaid(p => !p)}>
+            <span>{balancePaid ? '✓ Balance paid' : 'Balance due'}</span>
+            <span className="amt">{fmtMoney2((Number(revenue) || 0) - (Number(revenue) || 0) * 0.5)}</span>
+          </div>
         </div>
 
         <label style={{ marginTop: 16 }}>Techs Assigned</label>
