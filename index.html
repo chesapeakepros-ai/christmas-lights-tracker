@@ -168,6 +168,11 @@
   }
   .pay-btn .amt { font-size: 13.5px; }
   .pay-btn.paid { border-style: solid; border-color: var(--profit); background: #e1f3e6; color: var(--profit); }
+  .pay-btn.picking { outline: 2px solid var(--gold); outline-offset: 1px; }
+  .pay-btn .fee { font-size: 10.5px; font-weight: 600; color: var(--loss); }
+  .method-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .method-row .chip { padding: 6px 10px; font-size: 12px; }
+  .pay-line { background: var(--white); border: 1.5px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
 
   .badge-paid { background: #e1f3e6; color: var(--profit); }
   .badge-owed { background: #fde8e8; color: var(--loss); }
@@ -252,7 +257,7 @@ const { useState, useEffect, useRef, useMemo } = React;
 const STORAGE_KEY = 'xmasLightsTracker_v1';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-const DEFAULT_SETTINGS = { materialCostPerFt: 1.5, commissionPct: 20 };
+const DEFAULT_SETTINGS = { materialCostPerFt: 1.5, commissionPct: 20, cardFeePct: 3 };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -366,15 +371,18 @@ function computeJobFinancials(job, settings) {
   const commissionPool = techCount ? revenue * commissionPct / 100 : 0;
   const commissionEach = techCount ? commissionPool / techCount : 0;
 
+  const pay = jobPayments(job);
+  const cardFees = cardFeeFor(job, 'deposit', pay.deposit, settings) + cardFeeFor(job, 'balance', pay.balance, settings);
+
   const laborCost = commissionPool;
-  const totalCost = materialCost + laborCost + misc;
+  const totalCost = materialCost + laborCost + misc + cardFees;
   const netProfit = revenue - totalCost;
   const margin = revenue > 0 ? netProfit / revenue : 0;
 
   const payByTech = {};
   techIds.forEach(id => { payByTech[id] = commissionEach; });
 
-  return { materialCost, commissionPct, commissionPool, commissionEach, techCount, laborCost, totalCost, netProfit, margin, payByTech };
+  return { materialCost, commissionPct, commissionPool, commissionEach, techCount, laborCost, cardFees, totalCost, netProfit, margin, payByTech };
 }
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
@@ -385,6 +393,36 @@ function jobPayments(job) {
   const collected = (job.depositPaid ? deposit : 0) + (job.balancePaid ? balance : 0);
   return { revenue, deposit, balance, collected, outstanding: revenue - collected, fullyPaid: revenue > 0 && !!job.depositPaid && !!job.balancePaid };
 }
+
+const PAY_METHODS = ['Cash', 'Check', 'Card', 'Zelle/Venmo', 'Other'];
+
+// The fee % is locked in when a payment is recorded as Card, so changing the fee
+// setting later doesn't rewrite fees on payments already taken.
+const feePctFor = (job, which, settings) =>
+  Number(job[which + 'FeePct'] != null ? job[which + 'FeePct'] : settings.cardFeePct) || 0;
+function cardFeeFor(job, which, amount, settings) {
+  if (!job[which + 'Paid'] || job[which + 'Method'] !== 'Card') return 0;
+  return amount * feePctFor(job, which, settings) / 100;
+}
+
+// Payment fields to store for a deposit or balance ('deposit' | 'balance'). Clears the
+// method and fee lock when unpaid; keeps an existing Card fee lock if it stays Card.
+function paymentFields(job, which, paid, method, settings) {
+  const out = { [which + 'Paid']: paid };
+  if (paid && method) out[which + 'Method'] = method;
+  if (paid && method === 'Card') {
+    const keep = job[which + 'Method'] === 'Card' && job[which + 'FeePct'] != null;
+    out[which + 'FeePct'] = keep ? job[which + 'FeePct'] : Number(settings.cardFeePct) || 0;
+  }
+  return out;
+}
+const withoutPayment = (job, which) => {
+  const { [which + 'Paid']: _p, [which + 'Method']: _m, [which + 'FeePct']: _f, ...rest } = job;
+  return rest;
+};
+
+// The dashboard only counts money that's actually in: completed jobs paid in full.
+const isRealized = (job) => job.status === 'Completed' && jobPayments(job).fullyPaid;
 // Jobs saved before scheduling existed fall back to the date they were created.
 const scheduledOf = (job) => job.scheduledDate || (job.date ? job.date.slice(0, 10) : '');
 
@@ -563,7 +601,8 @@ function App() {
     });
   };
   const deleteJob = (id) => setJobs(prev => prev.filter(j => j.id !== id));
-  const togglePay = (id, field) => setJobs(prev => prev.map(j => j.id === id ? { ...j, [field]: !j[field] } : j));
+  const setPayment = (id, which, paid, method) => setJobs(prev => prev.map(j => j.id !== id ? j
+    : { ...withoutPayment(j, which), ...paymentFields(j, which, paid, method, settings) }));
 
   const upsertExpense = (ex) => {
     setExpenses(prev => {
@@ -590,7 +629,7 @@ function App() {
           <JobsTab jobs={jobs} techs={techs} settings={settings}
             onAdd={() => setJobModal({})}
             onEdit={(j) => setJobModal(j)}
-            onDelete={deleteJob} onTogglePay={togglePay} />
+            onDelete={deleteJob} onSetPayment={setPayment} />
         )}
         {tab === 'techs' && (
           <TechsTab techs={techs}
@@ -734,8 +773,20 @@ const JOB_FILTERS = [
   { id: 'paid', label: 'Paid in Full', test: (j) => jobPayments(j).fullyPaid },
 ];
 
-function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onTogglePay }) {
+function PaymentPicker({ paid, method, onPick }) {
+  return (
+    <div className="method-row" onClick={e => e.stopPropagation()}>
+      <div className={"chip" + (!paid ? ' active' : '')} onClick={() => onPick(false, '')}>Unpaid</div>
+      {PAY_METHODS.map(m => (
+        <div key={m} className={"chip" + (paid && method === m ? ' active' : '')} onClick={() => onPick(true, m)}>{m}</div>
+      ))}
+    </div>
+  );
+}
+
+function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment }) {
   const [filter, setFilter] = useState('all');
+  const [picking, setPicking] = useState(null); // { id, which } of the payment being recorded
   // Scheduled work reads best soonest-first; everything else newest/highest-first.
   const [sortKey, setSortKey] = useState('scheduled');
 
@@ -820,17 +871,30 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onTogglePay }
               <div className="metric"><div className="lbl">Margin</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtPct(calc.margin)}</div></div>
             </div>
             <div className="pay-row">
-              <div className={"pay-btn" + (job.depositPaid ? ' paid' : '')}
-                onClick={(e) => { e.stopPropagation(); onTogglePay(job.id, 'depositPaid'); }}>
-                <span>{job.depositPaid ? '✓ Deposit paid' : 'Deposit 50%'}</span>
-                <span className="amt">{fmtMoney(pay.deposit)}</span>
-              </div>
-              <div className={"pay-btn" + (job.balancePaid ? ' paid' : '')}
-                onClick={(e) => { e.stopPropagation(); onTogglePay(job.id, 'balancePaid'); }}>
-                <span>{job.balancePaid ? '✓ Balance paid' : 'Balance due'}</span>
-                <span className="amt">{fmtMoney(pay.balance)}</span>
-              </div>
+              {[['deposit', 'Deposit', 'Deposit 50%', pay.deposit], ['balance', 'Balance', 'Balance due', pay.balance]].map(([which, name, unpaidLabel, amount]) => {
+                const paid = !!job[which + 'Paid'];
+                const method = job[which + 'Method'];
+                const fee = cardFeeFor(job, which, amount, settings);
+                const isPicking = picking && picking.id === job.id && picking.which === which;
+                return (
+                  <div key={which} className={"pay-btn" + (paid ? ' paid' : '') + (isPicking ? ' picking' : '')}
+                    onClick={(e) => { e.stopPropagation(); setPicking(isPicking ? null : { id: job.id, which }); }}>
+                    <span>{paid ? `✓ ${name}${method ? ' · ' + method : ' paid'}` : unpaidLabel}</span>
+                    <span className="amt">{fmtMoney(amount)}</span>
+                    {fee > 0 && <span className="fee">−{fmtMoney2(fee)} card fee</span>}
+                  </div>
+                );
+              })}
             </div>
+            {picking && picking.id === job.id && (
+              <div onClick={e => e.stopPropagation()}>
+                <div className="hint" style={{ marginTop: 8 }}>How was the {picking.which} paid?</div>
+                <PaymentPicker
+                  paid={!!job[picking.which + 'Paid']}
+                  method={job[picking.which + 'Method'] || ''}
+                  onPick={(paid, method) => { onSetPayment(job.id, picking.which, paid, method); setPicking(null); }} />
+              </div>
+            )}
           </div>
         );
       })}
@@ -848,8 +912,13 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
   const [miscNote, setMiscNote] = useState(job.miscNote || '');
   const [date] = useState(job.date || new Date().toISOString());
   const [scheduledDate, setScheduledDate] = useState(job.scheduledDate || (job.date ? job.date.slice(0, 10) : todayYMD()));
-  const [depositPaid, setDepositPaid] = useState(!!job.depositPaid);
-  const [balancePaid, setBalancePaid] = useState(!!job.balancePaid);
+  // Older jobs can be marked paid with no method recorded; keep them paid rather than reset.
+  const [deposit, setDeposit] = useState({ paid: !!job.depositPaid, method: job.depositMethod || '' });
+  const [balance, setBalance] = useState({ paid: !!job.balancePaid, method: job.balanceMethod || '' });
+  const payFields = {
+    ...paymentFields(job, 'deposit', deposit.paid, deposit.method, settings),
+    ...paymentFields(job, 'balance', balance.paid, balance.method, settings),
+  };
   const [commissionStr, setCommissionStr] = useState(String(job.commissionPct != null ? job.commissionPct : settings.commissionPct));
   const [assignments, setAssignments] = useState((job.assignments || []).map(a => ({ techId: a.techId })));
 
@@ -863,8 +932,10 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
     miscCost: Number(miscCost) || 0,
     commissionPct: Number(commissionStr) || 0,
     assignments,
+    ...payFields,
   };
   const calc = computeJobFinancials(previewJob, settings);
+  const pay = jobPayments(previewJob);
 
   const save = () => {
     if (!customer.trim()) { alert('Enter a customer name.'); return; }
@@ -882,8 +953,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
       revenue: Number(revenue),
       status,
       scheduledDate,
-      depositPaid,
-      balancePaid,
+      ...payFields,
       ...(followsDefault ? {} : { commissionPct: pct }),
       miscCost: Number(miscCost) || 0,
       miscNote: miscNote.trim(),
@@ -924,16 +994,20 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
         </div>
 
         <label style={{ marginTop: 16 }}>Payment</label>
-        <div className="pay-row" style={{ marginTop: 0, paddingTop: 0, borderTop: 'none' }}>
-          <div className={"pay-btn" + (depositPaid ? ' paid' : '')} onClick={() => setDepositPaid(p => !p)}>
-            <span>{depositPaid ? '✓ Deposit paid' : 'Deposit 50%'}</span>
-            <span className="amt">{fmtMoney2((Number(revenue) || 0) * 0.5)}</span>
-          </div>
-          <div className={"pay-btn" + (balancePaid ? ' paid' : '')} onClick={() => setBalancePaid(p => !p)}>
-            <span>{balancePaid ? '✓ Balance paid' : 'Balance due'}</span>
-            <span className="amt">{fmtMoney2((Number(revenue) || 0) - (Number(revenue) || 0) * 0.5)}</span>
-          </div>
-        </div>
+        {[['deposit', 'Deposit 50%', pay.deposit, deposit, setDeposit], ['balance', 'Balance', pay.balance, balance, setBalance]].map(([which, name, amount, st, setSt]) => {
+          const fee = cardFeeFor(previewJob, which, amount, settings);
+          return (
+            <div className="pay-line" key={which}>
+              <div className="row">
+                <span style={{ fontWeight: 700, fontSize: 14 }}>{name}</span>
+                <span style={{ fontWeight: 800 }}>{fmtMoney2(amount)}</span>
+              </div>
+              <PaymentPicker paid={st.paid} method={st.method} onPick={(paid, method) => setSt({ paid, method })} />
+              {st.paid && !st.method && <div className="hint">Marked paid, but how wasn't recorded — tap a method to add it.</div>}
+              {fee > 0 && <div className="hint" style={{ color: 'var(--loss)' }}>Card fee ({feePctFor(previewJob, which, settings)}%): −{fmtMoney2(fee)}</div>}
+            </div>
+          );
+        })}
 
         <label style={{ marginTop: 16 }}>Techs Assigned</label>
         <div className="card" style={{ margin: 0, padding: 10 }}>
@@ -970,6 +1044,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
         <div className="summary-box">
           <div className="row"><span className="lab">Material cost ({previewJob.feet} ft × ${Number(settings.materialCostPerFt).toFixed(2)})</span><span>{fmtMoney2(calc.materialCost)}</span></div>
           <div className="row"><span className="lab">Commission ({calc.commissionPct}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
+          <div className="row"><span className="lab">Card fees</span><span>{fmtMoney2(calc.cardFees)}</span></div>
           <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
           <div className="row total"><span className="lab">Total cost</span><span>{fmtMoney2(calc.totalCost)}</span></div>
           <div className="row total"><span className="lab">Net profit</span><span>{fmtMoney2(calc.netProfit)}</span></div>
@@ -1073,17 +1148,26 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
   const barChart = useRef(null);
   const lineChart = useRef(null);
 
-  const calcs = useMemo(() => jobs.map(j => ({ job: j, calc: computeJobFinancials(j, settings) })), [jobs, settings]);
+  // Every figure below counts only completed jobs that are paid in full.
+  const calcs = useMemo(
+    () => jobs.filter(isRealized).map(j => ({ job: j, calc: computeJobFinancials(j, settings) })),
+    [jobs, settings]
+  );
+  const pending = useMemo(() => {
+    const notCounted = jobs.filter(j => !isRealized(j));
+    return { count: notCounted.length, revenue: notCounted.reduce((s, j) => s + (Number(j.revenue) || 0), 0) };
+  }, [jobs]);
 
   const totals = useMemo(() => {
     const revenue = calcs.reduce((s, c) => s + (Number(c.job.revenue) || 0), 0);
     const cost = calcs.reduce((s, c) => s + c.calc.totalCost, 0);
+    const cardFees = calcs.reduce((s, c) => s + c.calc.cardFees, 0);
     const profit = revenue - cost;
     const margins = calcs.filter(c => c.job.revenue > 0).map(c => c.calc.margin);
     const avgMargin = margins.length ? margins.reduce((s, m) => s + m, 0) / margins.length : 0;
     const expensesTotal = expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
     const trueProfit = profit - expensesTotal;
-    return { revenue, cost, profit, avgMargin, expensesTotal, trueProfit };
+    return { revenue, cost, cardFees, profit, avgMargin, expensesTotal, trueProfit };
   }, [calcs, expenses]);
 
   const sortedJobs = useMemo(() => {
@@ -1179,6 +1263,11 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
         <div className="stat-card"><div className="lbl">Net Profit</div><div className="val" style={{ color: totals.profit >= 0 ? 'var(--profit)' : 'var(--loss)' }}>{fmtMoney(totals.profit)}</div></div>
         <div className="stat-card"><div className="lbl">Avg Margin</div><div className="val">{fmtPct(totals.avgMargin)}</div></div>
       </div>
+      <div className="hint" style={{ marginTop: -6, marginBottom: 12 }}>
+        Counts only jobs that are <b>completed and paid in full</b> ({calcs.length} {calcs.length === 1 ? 'job' : 'jobs'}).
+        {pending.count > 0 && ` Not counted yet: ${pending.count} ${pending.count === 1 ? 'job' : 'jobs'} worth ${fmtMoney(pending.revenue)} (scheduled, or still owed money).`}
+        {totals.cardFees > 0 && ` Costs include ${fmtMoney2(totals.cardFees)} in card fees.`}
+      </div>
 
       <div className="summary-box" style={{ marginTop: 0, marginBottom: 14 }}>
         <div className="row"><span className="lab">Job profit (revenue − job costs)</span><span>{fmtMoney2(totals.profit)}</span></div>
@@ -1186,8 +1275,12 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
         <div className="row total"><span className="lab">True Net Profit</span><span style={{ color: totals.trueProfit >= 0 ? '#8fe3ab' : '#ff9d9d' }}>{fmtMoney2(totals.trueProfit)}</span></div>
       </div>
 
-      {jobs.length === 0 ? (
-        <div className="card"><div className="empty-state"><div className="big">📊</div>Add some jobs to see your dashboard.</div></div>
+      {calcs.length === 0 ? (
+        <div className="card"><div className="empty-state"><div className="big">📊</div>
+          {jobs.length === 0
+            ? 'Add some jobs to see your dashboard.'
+            : 'No completed, fully paid jobs yet. Jobs show up here once they’re marked Completed and both the deposit and balance are recorded as paid.'}
+        </div></div>
       ) : (
         <React.Fragment>
           <div className="card">
@@ -1259,6 +1352,12 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, user, syncState, authError, signIn, signOut, onImport }) {
   const [rateStr, setRateStr] = useState(String(settings.materialCostPerFt));
   const [commStr, setCommStr] = useState(String(settings.commissionPct));
+  const [feeStr, setFeeStr] = useState(String(settings.cardFeePct));
+  const saveCardFee = () => {
+    const v = Number(feeStr);
+    if (feeStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a card fee between 0 and 100%.'); setFeeStr(String(settings.cardFeePct)); return; }
+    setSettings(s => ({ ...s, cardFeePct: v }));
+  };
   const backups = lsGet(BACKUP_KEY, []).slice().reverse();
 
   const saveRate = () => {
@@ -1361,6 +1460,17 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
           <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveCommission}>Save</button>
         </div>
         <div className="hint">Each job pays this % of its revenue as commission, split evenly between the techs who worked it. You can change it on any single job. Completed jobs lock in their %, so changing this later only affects scheduled jobs.</div>
+      </div>
+
+      <div className="card">
+        <div className="section-title">Card Processing Fee</div>
+        <label>Fee on Card Payments (%)</label>
+        <div className="field-group">
+          <input type="number" inputMode="decimal" min="0" max="100" step="0.1" value={feeStr}
+            onChange={e => setFeeStr(e.target.value)} onBlur={saveCardFee} />
+          <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveCardFee}>Save</button>
+        </div>
+        <div className="hint">Taken off any deposit or balance recorded as paid by Card, and counted as a job cost. Each card payment keeps the fee % it was recorded with, so changing this later only affects new card payments.</div>
       </div>
 
       <div className="card">
