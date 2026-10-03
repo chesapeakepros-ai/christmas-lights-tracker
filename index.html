@@ -196,9 +196,6 @@
   .val.neg { color: var(--loss); }
 
   /* Assignment builder */
-  .assign-item { border: 1.5px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
-  .assign-head { display: flex; align-items: center; justify-content: space-between; }
-  .assign-head .nm { font-weight: 700; font-size: 14px; }
   .checkbox-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
   .checkbox-row:last-child { border-bottom: none; }
   .checkbox-row input[type=checkbox] { width: 19px; height: 19px; accent-color: var(--pine); }
@@ -255,14 +252,48 @@ const { useState, useEffect, useRef, useMemo } = React;
 const STORAGE_KEY = 'xmasLightsTracker_v1';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
+const DEFAULT_SETTINGS = { materialCostPerFt: 1.5, commissionPct: 20 };
+
+// Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
+function legacyLabor(job) {
+  const feet = Number(job.feet) || 0;
+  const assigns = job.assignments || [];
+  const hourly = assigns.filter(a => a.payType === 'hourly')
+    .reduce((s, a) => s + (Number(a.hours) || 0) * (Number(a.rate) || 0), 0);
+  const pf = assigns.filter(a => a.payType === 'perfoot');
+  if (!pf.length) return hourly;
+  const rate = job.perFootRate != null
+    ? Number(job.perFootRate)
+    : pf.reduce((s, a) => s + (Number(a.rate) || 0), 0) / pf.length;
+  return hourly + feet * (rate || 0);
+}
+
+// Pay used to be hourly or per-foot; it is now a commission (% of job revenue) split evenly
+// between the job's techs. Completed jobs are locked to the % that reproduces the labor they
+// actually cost, so past profit doesn't shift; scheduled jobs follow the current default.
+function migrate(data) {
+  const { perFootRate, ...savedSettings } = data.settings || {};
+  const settings = { ...DEFAULT_SETTINGS, ...savedSettings };
+  const techs = (data.techs || []).map(t => ({ id: t.id, name: t.name }));
+  const jobs = (data.jobs || []).map(j => {
+    const isLegacy = j.perFootRate != null || (j.assignments || []).some(a => a.payType);
+    if (!isLegacy) return j;
+    const { perFootRate: _oldRate, ...rest } = j;
+    const migrated = { ...rest, assignments: (j.assignments || []).map(a => ({ techId: a.techId })) };
+    if (j.status === 'Completed' && j.commissionPct == null) {
+      const revenue = Number(j.revenue) || 0;
+      migrated.commissionPct = revenue > 0 ? Math.round(legacyLabor(j) / revenue * 1e6) / 1e4 : 0;
+    }
+    return migrated;
+  });
+  return { ...data, techs, jobs, settings };
+}
+
 function loadData() {
-  const fallback = { techs: [], jobs: [], expenses: [], settings: { materialCostPerFt: 1.5 } };
+  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS } };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      return { ...fallback, ...parsed, settings: { ...fallback.settings, ...(parsed.settings || {}) } };
-    }
+    if (raw) return migrate({ ...fallback, ...JSON.parse(raw) });
   } catch (e) {}
   return fallback;
 }
@@ -273,6 +304,9 @@ function saveData(data) {
 // ---- Cloud sync (Google sign-in + Firestore), version-guarded against stale overwrites ----
 const FB_AUTH = window.fbAuth;
 const FB_DB = window.fbDb;
+const LIVE_URL = 'https://chesapeakepros-ai.github.io/christmas-lights-tracker/';
+// Google sign-in cannot run from a file opened off the computer's disk, only from a web address.
+const IS_FILE = location.protocol === 'file:';
 const TS_KEY = 'xmasLightsUpdatedAt';
 const BACKUP_KEY = 'xmasLightsBackups';
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
@@ -324,28 +358,23 @@ function computeJobFinancials(job, settings) {
   const misc = Number(job.miscCost) || 0;
   const materialCost = feet * (Number(settings.materialCostPerFt) || 0);
 
-  const assignments = job.assignments || [];
-  const hourlyAssigns = assignments.filter(a => a.payType === 'hourly');
-  const perFootAssigns = assignments.filter(a => a.payType === 'perfoot');
+  // Commission is a % of job revenue, split evenly between the techs on the job.
+  // A job with no techs assigned pays no commission.
+  const techIds = (job.assignments || []).map(a => a.techId);
+  const techCount = techIds.length;
+  const commissionPct = Number(job.commissionPct != null ? job.commissionPct : settings.commissionPct) || 0;
+  const commissionPool = techCount ? revenue * commissionPct / 100 : 0;
+  const commissionEach = techCount ? commissionPool / techCount : 0;
 
-  const hourlyCost = hourlyAssigns.reduce((sum, a) => sum + (Number(a.hours) || 0) * (Number(a.rate) || 0), 0);
-
-  const avgPerFootRate = perFootAssigns.length
-    ? perFootAssigns.reduce((s, a) => s + (Number(a.rate) || 0), 0) / perFootAssigns.length
-    : 0;
-  const perFootPool = perFootAssigns.length ? feet * avgPerFootRate : 0;
-  const perFootEach = perFootAssigns.length ? perFootPool / perFootAssigns.length : 0;
-
-  const laborCost = hourlyCost + perFootPool;
+  const laborCost = commissionPool;
   const totalCost = materialCost + laborCost + misc;
   const netProfit = revenue - totalCost;
   const margin = revenue > 0 ? netProfit / revenue : 0;
 
   const payByTech = {};
-  hourlyAssigns.forEach(a => { payByTech[a.techId] = (Number(a.hours) || 0) * (Number(a.rate) || 0); });
-  perFootAssigns.forEach(a => { payByTech[a.techId] = perFootEach; });
+  techIds.forEach(id => { payByTech[id] = commissionEach; });
 
-  return { materialCost, hourlyCost, perFootPool, perFootEach, laborCost, totalCost, netProfit, margin, payByTech };
+  return { materialCost, commissionPct, commissionPool, commissionEach, techCount, laborCost, totalCost, netProfit, margin, payByTech };
 }
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
@@ -358,10 +387,6 @@ function jobPayments(job) {
 }
 // Jobs saved before scheduling existed fall back to the date they were created.
 const scheduledOf = (job) => job.scheduledDate || (job.date ? job.date.slice(0, 10) : '');
-
-function techDefaultFor(tech) {
-  return { techId: tech.id, payType: tech.payType, rate: tech.rate, hours: '' };
-}
 
 // ================= App =================
 function App() {
@@ -417,22 +442,28 @@ function App() {
       const local = dataRef.current;
       if (snapshot.exists) {
         const d = snapshot.data();
-        const incoming = {
+        // Another device may still be running an older version, so convert whatever arrives.
+        const incoming = migrate({
           techs: d.techs || [],
           jobs: d.jobs || [],
           expenses: d.expenses || [],
-          settings: { materialCostPerFt: 1.5, ...(d.settings || {}) },
-        };
+          settings: d.settings || {},
+        });
         const incomingJSON = JSON.stringify(incoming);
         if (incomingJSON === lastCloudJSON.current) return;
 
         // Only adopt the cloud copy if it is genuinely newer; a stale/emptier copy must never
         // overwrite newer local data. In that case keep ours and re-push it to heal the cloud.
+        // A completely empty cloud copy is never trusted over real local data, whatever its timestamp.
         const cloudTs = Number(d.updatedAt) || 0;
         const localTs = Number(localUpdatedAt.current) || 0;
-        const adopt = recordCount(local) === 0
+        const cloudCount = recordCount(incoming);
+        const localCount = recordCount(local);
+        if (cloudCount === 0 && localCount === 0) return;
+        const adopt = cloudCount > 0 && (
+          localCount === 0
           || cloudTs > localTs
-          || (cloudTs === localTs && recordCount(incoming) >= recordCount(local));
+          || (cloudTs === localTs && cloudCount >= localCount));
 
         if (adopt) {
           lastCloudJSON.current = incomingJSON;
@@ -445,7 +476,8 @@ function App() {
         } else if (!isSaving.current) {
           doCloudSave(uid, JSON.stringify(local), Math.max(localTs, cloudTs) + 1);
         }
-      } else {
+      } else if (recordCount(local) > 0) {
+        // No cloud copy yet: seed it, but never from an empty device.
         const ts = Math.max(Number(localUpdatedAt.current) || 0, Date.now());
         doCloudSave(uid, JSON.stringify(local), ts);
       }
@@ -500,11 +532,17 @@ function App() {
     if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; }
   };
 
-  const importData = (d) => {
-    setTechs(Array.isArray(d.techs) ? d.techs : []);
-    setJobs(Array.isArray(d.jobs) ? d.jobs : []);
-    setExpenses(Array.isArray(d.expenses) ? d.expenses : []);
-    setSettings({ materialCostPerFt: 1.5, ...(d.settings || {}) });
+  const importData = (raw) => {
+    const d = migrate({
+      techs: Array.isArray(raw.techs) ? raw.techs : [],
+      jobs: Array.isArray(raw.jobs) ? raw.jobs : [],
+      expenses: Array.isArray(raw.expenses) ? raw.expenses : [],
+      settings: raw.settings || {},
+    });
+    setTechs(d.techs);
+    setJobs(d.jobs);
+    setExpenses(d.expenses);
+    setSettings(d.settings);
   };
 
   const upsertTech = (t) => {
@@ -642,9 +680,7 @@ function TechsTab({ techs, onAdd, onEdit, onDelete }) {
           <div className="tech-row" key={t.id}>
             <div>
               <div className="tech-name">{t.name}</div>
-              <div className="tech-meta">
-                {t.payType === 'hourly' ? `Hourly · $${Number(t.rate).toFixed(2)}/hr` : `Per Foot · $${Number(t.rate).toFixed(2)}/ft`}
-              </div>
+              <div className="tech-meta">Paid by commission</div>
             </div>
             <div>
               <button className="icon-btn" onClick={() => onEdit(t)}>✏️</button>
@@ -660,13 +696,10 @@ function TechsTab({ techs, onAdd, onEdit, onDelete }) {
 function TechModal({ tech, onClose, onSave }) {
   const isNew = !tech.id;
   const [name, setName] = useState(tech.name || '');
-  const [payType, setPayType] = useState(tech.payType || 'hourly');
-  const [rate, setRate] = useState(tech.rate != null ? String(tech.rate) : '');
 
   const save = () => {
     if (!name.trim()) { alert('Enter a tech name.'); return; }
-    if (rate === '' || isNaN(Number(rate)) || Number(rate) < 0) { alert('Enter a valid rate.'); return; }
-    onSave({ id: tech.id || uid(), name: name.trim(), payType, rate: Number(rate) });
+    onSave({ id: tech.id || uid(), name: name.trim() });
   };
 
   return (
@@ -679,15 +712,9 @@ function TechModal({ tech, onClose, onSave }) {
 
         <label>Tech Name</label>
         <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mike Johnson" autoFocus />
-
-        <label>Default Pay Type</label>
-        <div className="pill-group">
-          <div className={"pill" + (payType === 'hourly' ? ' active' : '')} onClick={() => setPayType('hourly')}>Hourly</div>
-          <div className={"pill" + (payType === 'perfoot' ? ' active' : '')} onClick={() => setPayType('perfoot')}>Per Foot</div>
+        <div className="hint" style={{ marginTop: 10 }}>
+          Techs are paid a commission on each job they work, split evenly with the other techs on that job. Set the % in Settings, or per job.
         </div>
-
-        <label>{payType === 'hourly' ? 'Default Rate ($/hr)' : 'Default Rate ($/ft)'}</label>
-        <input type="number" inputMode="decimal" min="0" step="0.01" value={rate} onChange={e => setRate(e.target.value)} placeholder="0.00" />
 
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
           <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
@@ -823,23 +850,18 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
   const [scheduledDate, setScheduledDate] = useState(job.scheduledDate || (job.date ? job.date.slice(0, 10) : todayYMD()));
   const [depositPaid, setDepositPaid] = useState(!!job.depositPaid);
   const [balancePaid, setBalancePaid] = useState(!!job.balancePaid);
-  const [assignments, setAssignments] = useState(job.assignments || []);
+  const [commissionStr, setCommissionStr] = useState(String(job.commissionPct != null ? job.commissionPct : settings.commissionPct));
+  const [assignments, setAssignments] = useState((job.assignments || []).map(a => ({ techId: a.techId })));
 
   const toggleTech = (tech, checked) => {
-    if (checked) {
-      setAssignments(prev => [...prev, techDefaultFor(tech)]);
-    } else {
-      setAssignments(prev => prev.filter(a => a.techId !== tech.id));
-    }
-  };
-  const updateAssign = (techId, patch) => {
-    setAssignments(prev => prev.map(a => a.techId === techId ? { ...a, ...patch } : a));
+    setAssignments(prev => checked ? [...prev, { techId: tech.id }] : prev.filter(a => a.techId !== tech.id));
   };
 
   const previewJob = {
     feet: Number(feet) || 0,
     revenue: Number(revenue) || 0,
     miscCost: Number(miscCost) || 0,
+    commissionPct: Number(commissionStr) || 0,
     assignments,
   };
   const calc = computeJobFinancials(previewJob, settings);
@@ -848,14 +870,11 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
     if (!customer.trim()) { alert('Enter a customer name.'); return; }
     if (feet === '' || isNaN(Number(feet)) || Number(feet) < 0) { alert('Enter valid feet installed.'); return; }
     if (revenue === '' || isNaN(Number(revenue)) || Number(revenue) < 0) { alert('Enter a valid revenue amount.'); return; }
-    for (const a of assignments) {
-      if (a.payType === 'hourly' && (a.hours === '' || isNaN(Number(a.hours)) || Number(a.hours) < 0)) {
-        alert('Enter valid hours for every hourly tech.'); return;
-      }
-      if (isNaN(Number(a.rate)) || Number(a.rate) < 0) {
-        alert('Enter a valid rate for every assigned tech.'); return;
-      }
-    }
+    const pct = Number(commissionStr);
+    if (commissionStr === '' || isNaN(pct) || pct < 0 || pct > 100) { alert('Enter a commission between 0 and 100%.'); return; }
+    // A scheduled job left at the default keeps following the default; a custom % or a
+    // completed job locks in its own %, so changing the default later can't rewrite it.
+    const followsDefault = status !== 'Completed' && pct === Number(settings.commissionPct);
     onSave({
       id: job.id || uid(),
       customer: customer.trim(),
@@ -865,6 +884,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
       scheduledDate,
       depositPaid,
       balancePaid,
+      ...(followsDefault ? {} : { commissionPct: pct }),
       miscCost: Number(miscCost) || 0,
       miscNote: miscNote.trim(),
       date,
@@ -926,31 +946,20 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
                 <div className="checkbox-row">
                   <input type="checkbox" checked={!!a} onChange={e => toggleTech(t, e.target.checked)} />
                   <div className="nm">{t.name}</div>
-                  <div className="tech-meta">{t.payType === 'hourly' ? 'Hourly' : 'Per Foot'}</div>
+                  {a && <div className="tech-meta" style={{ fontWeight: 700, color: 'var(--profit)' }}>{fmtMoney2(calc.commissionEach)}</div>}
                 </div>
-                {a && (
-                  <div className="assign-item">
-                    <div className="pill-group" style={{ marginBottom: 8 }}>
-                      <div className={"pill" + (a.payType === 'hourly' ? ' active' : '')} onClick={() => updateAssign(t.id, { payType: 'hourly' })}>Hourly</div>
-                      <div className={"pill" + (a.payType === 'perfoot' ? ' active' : '')} onClick={() => updateAssign(t.id, { payType: 'perfoot' })}>Per Foot</div>
-                    </div>
-                    <div className="field-group">
-                      {a.payType === 'hourly' && (
-                        <div>
-                          <label style={{ margin: '0 0 4px' }}>Hours Worked</label>
-                          <input type="number" inputMode="decimal" min="0" step="0.25" value={a.hours} onChange={e => updateAssign(t.id, { hours: e.target.value })} placeholder="0" />
-                        </div>
-                      )}
-                      <div>
-                        <label style={{ margin: '0 0 4px' }}>{a.payType === 'hourly' ? 'Rate ($/hr)' : 'Rate ($/ft)'}</label>
-                        <input type="number" inputMode="decimal" min="0" step="0.01" value={a.rate} onChange={e => updateAssign(t.id, { rate: e.target.value })} placeholder="0.00" />
-                      </div>
-                    </div>
-                  </div>
-                )}
               </React.Fragment>
             );
           })}
+        </div>
+
+        <label>Commission (% of job revenue)</label>
+        <input type="number" inputMode="decimal" min="0" max="100" step="0.5" value={commissionStr} onChange={e => setCommissionStr(e.target.value)} placeholder="0" />
+        <div className="hint">
+          {calc.techCount === 0
+            ? 'No techs assigned yet, so no commission is counted.'
+            : `${(Number(commissionStr) || 0)}% of ${fmtMoney2(previewJob.revenue)} = ${fmtMoney2(calc.commissionPool)}, split evenly between ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'} (${fmtMoney2(calc.commissionEach)} each).`}
+          {Number(commissionStr) !== Number(settings.commissionPct) && ` Your default is ${settings.commissionPct}%.`}
         </div>
 
         <label>Misc / Materials Cost ($)</label>
@@ -960,8 +969,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
 
         <div className="summary-box">
           <div className="row"><span className="lab">Material cost ({previewJob.feet} ft × ${Number(settings.materialCostPerFt).toFixed(2)})</span><span>{fmtMoney2(calc.materialCost)}</span></div>
-          <div className="row"><span className="lab">Hourly labor</span><span>{fmtMoney2(calc.hourlyCost)}</span></div>
-          <div className="row"><span className="lab">Per-foot labor pool</span><span>{fmtMoney2(calc.perFootPool)}</span></div>
+          <div className="row"><span className="lab">Commission ({calc.commissionPct}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
           <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
           <div className="row total"><span className="lab">Total cost</span><span>{fmtMoney2(calc.totalCost)}</span></div>
           <div className="row total"><span className="lab">Net profit</span><span>{fmtMoney2(calc.netProfit)}</span></div>
@@ -1105,16 +1113,14 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 
   const perTech = useMemo(() => {
     return techs.map(t => {
-      let hours = 0, feet = 0, pay = 0, jobCount = 0;
+      let revenue = 0, pay = 0, jobCount = 0;
       calcs.forEach(({ job, calc }) => {
-        const a = (job.assignments || []).find(x => x.techId === t.id);
-        if (!a) return;
+        if (!(job.assignments || []).some(x => x.techId === t.id)) return;
         jobCount += 1;
+        revenue += Number(job.revenue) || 0;
         pay += calc.payByTech[t.id] || 0;
-        if (a.payType === 'hourly') hours += Number(a.hours) || 0;
-        else feet += Number(job.feet) || 0;
       });
-      return { tech: t, hours, feet, pay, jobCount };
+      return { tech: t, revenue, pay, jobCount };
     });
   }, [techs, calcs]);
 
@@ -1218,15 +1224,14 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
               <div className="table-wrap">
                 <table>
                   <thead>
-                    <tr><th>Tech</th><th className="num">Hours</th><th className="num">Feet</th><th className="num">Jobs</th><th className="num">Total Pay</th></tr>
+                    <tr><th>Tech</th><th className="num">Jobs</th><th className="num">Job Revenue</th><th className="num">Commission</th></tr>
                   </thead>
                   <tbody>
                     {perTech.map(pt => (
                       <tr key={pt.tech.id}>
                         <td>{pt.tech.name}</td>
-                        <td className="num">{pt.hours ? pt.hours.toFixed(2) : '—'}</td>
-                        <td className="num">{pt.feet ? pt.feet : '—'}</td>
                         <td className="num">{pt.jobCount}</td>
+                        <td className="num">{fmtMoney(pt.revenue)}</td>
                         <td className="num" style={{ fontWeight: 700 }}>{fmtMoney(pt.pay)}</td>
                       </tr>
                     ))}
@@ -1253,12 +1258,47 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 // ================= Settings =================
 function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, user, syncState, authError, signIn, signOut, onImport }) {
   const [rateStr, setRateStr] = useState(String(settings.materialCostPerFt));
+  const [commStr, setCommStr] = useState(String(settings.commissionPct));
   const backups = lsGet(BACKUP_KEY, []).slice().reverse();
 
   const saveRate = () => {
     const v = Number(rateStr);
     if (isNaN(v) || v < 0) { alert('Enter a valid rate.'); setRateStr(String(settings.materialCostPerFt)); return; }
     setSettings(s => ({ ...s, materialCostPerFt: v }));
+  };
+  const saveCommission = () => {
+    const v = Number(commStr);
+    if (commStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a commission between 0 and 100%.'); setCommStr(String(settings.commissionPct)); return; }
+    setSettings(s => ({ ...s, commissionPct: v }));
+  };
+
+  const [importMsg, setImportMsg] = useState('');
+  const exportBackup = () => {
+    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `christmas-lights-backup-${todayYMD()}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+  const importBackup = (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      let d;
+      try { d = JSON.parse(ev.target.result); } catch (err) { setImportMsg('That file is not a valid backup.'); return; }
+      if (!d || !Array.isArray(d.jobs) || !Array.isArray(d.techs)) { setImportMsg('That file does not look like a Christmas Lights backup.'); return; }
+      const counts = `${d.techs.length} techs, ${d.jobs.length} jobs, ${(d.expenses || []).length} expenses`;
+      if (!confirm(`Import this backup (${counts})?\n\nIt REPLACES all current data here, and on your other devices once synced.`)) return;
+      onImport(d);
+      setImportMsg(`Imported ${counts}.`);
+    };
+    reader.readAsText(file);
   };
 
   return (
@@ -1278,6 +1318,16 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
               {syncState === 'error' ? '⚠️ Could not reach the cloud. Your data is safe on this device and will retry automatically.' : '✅ Your data syncs automatically across all devices signed in with this account.'}
             </div>
             <button className="btn btn-ghost btn-block" onClick={signOut}>Sign Out</button>
+          </div>
+        ) : IS_FILE ? (
+          <div>
+            <div className="hint" style={{ marginBottom: 10 }}>
+              You opened the copy saved on this computer. Google sign-in only works from the web version:
+            </div>
+            <a className="btn btn-primary btn-block" href={LIVE_URL} style={{ textDecoration: 'none' }}>Open the web version</a>
+            <div className="hint" style={{ marginTop: 10 }}>
+              Data entered in this copy stays in this copy. To move it over, tap <b>Export backup</b> below, then <b>Import backup</b> on the web version.
+            </div>
           </div>
         ) : (
           <div>
@@ -1303,6 +1353,17 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
       </div>
 
       <div className="card">
+        <div className="section-title">Tech Commission</div>
+        <label>Default Commission (% of job revenue)</label>
+        <div className="field-group">
+          <input type="number" inputMode="decimal" min="0" max="100" step="0.5" value={commStr}
+            onChange={e => setCommStr(e.target.value)} onBlur={saveCommission} />
+          <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveCommission}>Save</button>
+        </div>
+        <div className="hint">Each job pays this % of its revenue as commission, split evenly between the techs who worked it. You can change it on any single job. Completed jobs lock in their %, so changing this later only affects scheduled jobs.</div>
+      </div>
+
+      <div className="card">
         <div className="row" style={{ marginBottom: techs.length ? 8 : 0 }}>
           <div className="section-title" style={{ marginBottom: 0 }}>Tech Roster</div>
           <button className="btn btn-primary btn-sm" onClick={onAddTech}>+ Add</button>
@@ -1311,7 +1372,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
           <div className="tech-row" key={t.id}>
             <div>
               <div className="tech-name">{t.name}</div>
-              <div className="tech-meta">{t.payType === 'hourly' ? `Hourly · $${Number(t.rate).toFixed(2)}/hr` : `Per Foot · $${Number(t.rate).toFixed(2)}/ft`}</div>
+              <div className="tech-meta">Paid by commission</div>
             </div>
             <div>
               <button className="icon-btn" onClick={() => onEditTech(t)}>✏️</button>
@@ -1351,6 +1412,19 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
             </div>
           </div>
         ))}
+      </div>
+
+      <div className="card">
+        <div className="section-title">Backup File</div>
+        <div className="hint" style={{ marginBottom: 10 }}>Save all your data to a file, or load it from one — for moving data between copies of the app or keeping your own backup.</div>
+        <div className="field-group">
+          <button className="btn btn-primary" style={{ flex: 1 }} onClick={exportBackup}>Export backup</button>
+          <label className="btn btn-ghost" style={{ flex: 1, margin: 0, color: 'var(--text)', fontSize: 14.5 }}>
+            Import backup
+            <input type="file" accept="application/json,.json" onChange={importBackup} style={{ display: 'none' }} />
+          </label>
+        </div>
+        {importMsg && <div className="hint" style={{ marginTop: 8 }}>{importMsg}</div>}
       </div>
 
       <div className="card">
