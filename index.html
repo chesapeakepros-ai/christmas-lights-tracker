@@ -257,7 +257,8 @@ const { useState, useEffect, useRef, useMemo } = React;
 const STORAGE_KEY = 'xmasLightsTracker_v1';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-const DEFAULT_SETTINGS = { materialCostPerFt: 1.5, commissionPct: 20, cardFeePct: 3 };
+// Lights are logged once as a business expense, so jobs carry no per-foot material cost.
+const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3 };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -277,7 +278,7 @@ function legacyLabor(job) {
 // between the job's techs. Completed jobs are locked to the % that reproduces the labor they
 // actually cost, so past profit doesn't shift; scheduled jobs follow the current default.
 function migrate(data) {
-  const { perFootRate, ...savedSettings } = data.settings || {};
+  const { perFootRate, materialCostPerFt, ...savedSettings } = data.settings || {};
   const settings = { ...DEFAULT_SETTINGS, ...savedSettings };
   const techs = (data.techs || []).map(t => ({ id: t.id, name: t.name }));
   const jobs = (data.jobs || []).map(j => {
@@ -358,10 +359,8 @@ const EXPENSE_CATEGORIES = ['Vehicle & Fuel', 'Equipment & Supplies', 'Insurance
 
 // ---- Core financial calculation for a single job ----
 function computeJobFinancials(job, settings) {
-  const feet = Number(job.feet) || 0;
   const revenue = Number(job.revenue) || 0;
   const misc = Number(job.miscCost) || 0;
-  const materialCost = feet * (Number(settings.materialCostPerFt) || 0);
 
   // Commission is a % of job revenue, split evenly between the techs on the job.
   // A job with no techs assigned pays no commission.
@@ -375,14 +374,14 @@ function computeJobFinancials(job, settings) {
   const cardFees = cardFeeFor(job, 'deposit', pay.deposit, settings) + cardFeeFor(job, 'balance', pay.balance, settings);
 
   const laborCost = commissionPool;
-  const totalCost = materialCost + laborCost + misc + cardFees;
+  const totalCost = laborCost + misc + cardFees;
   const netProfit = revenue - totalCost;
   const margin = revenue > 0 ? netProfit / revenue : 0;
 
   const payByTech = {};
   techIds.forEach(id => { payByTech[id] = commissionEach; });
 
-  return { materialCost, commissionPct, commissionPool, commissionEach, techCount, laborCost, cardFees, totalCost, netProfit, margin, payByTech };
+  return { commissionPct, commissionPool, commissionEach, techCount, laborCost, cardFees, totalCost, netProfit, margin, payByTech };
 }
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
@@ -1042,7 +1041,6 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
         <input type="text" value={miscNote} onChange={e => setMiscNote(e.target.value)} placeholder="clips, timers, extension cords, gas..." />
 
         <div className="summary-box">
-          <div className="row"><span className="lab">Material cost ({previewJob.feet} ft × ${Number(settings.materialCostPerFt).toFixed(2)})</span><span>{fmtMoney2(calc.materialCost)}</span></div>
           <div className="row"><span className="lab">Commission ({calc.commissionPct}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
           <div className="row"><span className="lab">Card fees</span><span>{fmtMoney2(calc.cardFees)}</span></div>
           <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
@@ -1350,7 +1348,6 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 
 // ================= Settings =================
 function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, user, syncState, authError, signIn, signOut, onImport }) {
-  const [rateStr, setRateStr] = useState(String(settings.materialCostPerFt));
   const [commStr, setCommStr] = useState(String(settings.commissionPct));
   const [feeStr, setFeeStr] = useState(String(settings.cardFeePct));
   const saveCardFee = () => {
@@ -1360,11 +1357,6 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
   };
   const backups = lsGet(BACKUP_KEY, []).slice().reverse();
 
-  const saveRate = () => {
-    const v = Number(rateStr);
-    if (isNaN(v) || v < 0) { alert('Enter a valid rate.'); setRateStr(String(settings.materialCostPerFt)); return; }
-    setSettings(s => ({ ...s, materialCostPerFt: v }));
-  };
   const saveCommission = () => {
     const v = Number(commStr);
     if (commStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a commission between 0 and 100%.'); setCommStr(String(settings.commissionPct)); return; }
@@ -1438,17 +1430,6 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
           </div>
         )}
         {authError && <div className="msg-err">{authError}</div>}
-      </div>
-
-      <div className="card">
-        <div className="section-title">Material Cost</div>
-        <label>Material Cost per Foot ($/ft)</label>
-        <div className="field-group">
-          <input type="number" inputMode="decimal" min="0" step="0.01" value={rateStr}
-            onChange={e => setRateStr(e.target.value)} onBlur={saveRate} />
-          <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveRate}>Save</button>
-        </div>
-        <div className="hint">Applied automatically to every job as feet installed × this rate.</div>
       </div>
 
       <div className="card">
