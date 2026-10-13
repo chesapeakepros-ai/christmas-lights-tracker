@@ -182,6 +182,10 @@
 
   /* Tech list */
   .tech-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-bottom: 1px solid var(--border); }
+  .payout-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 14.5px; }
+  .payout-row:last-of-type { border-bottom: none; }
+  .payout-job { padding: 9px 0; border-top: 1px dashed var(--border); font-size: 12.5px; color: var(--muted); line-height: 1.45; }
+  .payout-job b { color: var(--text); }
   .tech-row:last-child { border-bottom: none; }
   .tech-name { font-weight: 700; }
   .tech-meta { font-size: 12.5px; color: var(--muted); }
@@ -280,7 +284,7 @@ function legacyLabor(job) {
 function migrate(data) {
   const { perFootRate, materialCostPerFt, ...savedSettings } = data.settings || {};
   const settings = { ...DEFAULT_SETTINGS, ...savedSettings };
-  const techs = (data.techs || []).map(t => ({ id: t.id, name: t.name }));
+  const techs = (data.techs || []).map(t => ({ id: t.id, name: t.name, ...(t.removed ? { removed: true } : {}) }));
   const jobs = (data.jobs || []).map(j => {
     const isLegacy = j.perFootRate != null || (j.assignments || []).some(a => a.payType);
     if (!isLegacy) return j;
@@ -351,9 +355,21 @@ const fmtDateOnly = (ymd) => {
   const [y, m, d] = ymd.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 };
-const todayYMD = () => {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const ymdOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const todayYMD = () => ymdOf(new Date());
+// Pay weeks run Monday–Sunday. Returns the Monday (local time) of the week containing ymd.
+const weekStartOf = (ymd) => {
+  const [y, m, d] = ymd.split('-').map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() - ((dt.getDay() + 6) % 7));
+  return dt;
+};
+const fmtWeekRange = (monday) => {
+  const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6);
+  const sameYear = monday.getFullYear() === sunday.getFullYear();
+  const start = monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }) });
+  const end = sunday.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  return `${start} – ${end}`;
 };
 const EXPENSE_CATEGORIES = ['Vehicle & Fuel', 'Equipment & Supplies', 'Insurance', 'Advertising', 'Storage', 'Other'];
 
@@ -424,6 +440,30 @@ const withoutPayment = (job, which) => {
 const isRealized = (job) => job.status === 'Completed' && jobPayments(job).fullyPaid;
 // Jobs saved before scheduling existed fall back to the date they were created.
 const scheduledOf = (job) => job.scheduledDate || (job.date ? job.date.slice(0, 10) : '');
+
+// Commission owed per pay week: completed jobs, grouped by the week of their scheduled
+// (install) date. Newest week first.
+function weeklyPayouts(jobs, settings) {
+  const weeks = {};
+  jobs.forEach(job => {
+    const day = scheduledOf(job);
+    if (job.status !== 'Completed' || !day) return;
+    const calc = computeJobFinancials(job, settings);
+    if (!calc.techCount) return;
+    const monday = weekStartOf(day);
+    const key = ymdOf(monday);
+    const week = weeks[key] || (weeks[key] = { key, monday, total: 0, byTech: {}, jobs: [] });
+    week.jobs.push({ job, calc, owed: jobPayments(job).outstanding });
+    Object.entries(calc.payByTech).forEach(([techId, amount]) => {
+      const t = week.byTech[techId] || (week.byTech[techId] = { techId, amount: 0, jobCount: 0 });
+      t.amount += amount;
+      t.jobCount += 1;
+      week.total += amount;
+    });
+  });
+  Object.values(weeks).forEach(w => w.jobs.sort((a, b) => scheduledOf(a.job).localeCompare(scheduledOf(b.job))));
+  return Object.values(weeks).sort((a, b) => b.key.localeCompare(a.key));
+}
 
 // ================= App =================
 function App() {
@@ -588,10 +628,16 @@ function App() {
       return exists ? prev.map(x => x.id === t.id ? t : x) : [...prev, t];
     });
   };
+  // Removing a tech only takes them off jobs that aren't completed. Completed jobs keep them,
+  // so past payouts and everyone else's share of those jobs never change. A tech with
+  // completed work stays on record (hidden from the roster) so their name still shows.
   const deleteTech = (id) => {
-    setTechs(prev => prev.filter(t => t.id !== id));
-    setJobs(prev => prev.map(j => ({ ...j, assignments: (j.assignments || []).filter(a => a.techId !== id) })));
+    const hasHistory = jobs.some(j => j.status === 'Completed' && (j.assignments || []).some(a => a.techId === id));
+    setTechs(prev => hasHistory ? prev.map(t => t.id === id ? { ...t, removed: true } : t) : prev.filter(t => t.id !== id));
+    setJobs(prev => prev.map(j => j.status === 'Completed' ? j
+      : { ...j, assignments: (j.assignments || []).filter(a => a.techId !== id) }));
   };
+  const activeTechs = techs.filter(t => !t.removed);
 
   const upsertJob = (j) => {
     setJobs(prev => {
@@ -631,7 +677,7 @@ function App() {
             onDelete={deleteJob} onSetPayment={setPayment} />
         )}
         {tab === 'techs' && (
-          <TechsTab techs={techs}
+          <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings}
             onAdd={() => setTechModal({})}
             onEdit={(t) => setTechModal(t)}
             onDelete={deleteTech} />
@@ -647,7 +693,7 @@ function App() {
         )}
         {tab === 'settings' && (
           <SettingsTab settings={settings} setSettings={setSettings}
-            techs={techs} onAddTech={() => setTechModal({})}
+            techs={activeTechs} onAddTech={() => setTechModal({})}
             onEditTech={(t) => setTechModal(t)} onDeleteTech={deleteTech}
             jobs={jobs} onEditJob={(j) => setJobModal(j)} onDeleteJob={deleteJob}
             expenses={expenses} onEditExpense={(e) => setExpenseModal(e)} onDeleteExpense={deleteExpense}
@@ -701,7 +747,75 @@ function App() {
 }
 
 // ================= Techs =================
-function TechsTab({ techs, onAdd, onEdit, onDelete }) {
+function WeeklyPayouts({ jobs, allTechs, settings }) {
+  const weeks = useMemo(() => weeklyPayouts(jobs, settings), [jobs, settings]);
+  const [openWeeks, setOpenWeeks] = useState({});
+  const thisWeek = ymdOf(weekStartOf(todayYMD()));
+  const nameOf = (id) => (allTechs.find(t => t.id === id) || {}).name || 'Former tech';
+  const toggle = (key) => setOpenWeeks(o => ({ ...o, [key]: !o[key] }));
+
+  return (
+    <div>
+      <div className="section-title" style={{ marginTop: 6 }}>Weekly Payouts</div>
+      <div className="hint" style={{ marginBottom: 10 }}>
+        Commission owed from completed jobs, grouped by the week of each job's scheduled date (Monday–Sunday).
+      </div>
+      {weeks.length === 0 ? (
+        <div className="card"><div className="empty-state">
+          <div className="big">💵</div>
+          No payouts yet. Commission shows up here once a job with techs on it is marked Completed.
+        </div></div>
+      ) : weeks.map(w => {
+        const owedJobs = w.jobs.filter(j => j.owed > 0).length;
+        return (
+          <div className="card" key={w.key}>
+            <div className="row" style={{ marginBottom: 4 }}>
+              <div>
+                <div className="tech-name">{w.key === thisWeek ? 'This week' : 'Week of ' + w.monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+                <div className="tech-meta">{fmtWeekRange(w.monday)}</div>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <div style={{ fontWeight: 800, fontSize: 17 }}>{fmtMoney2(w.total)}</div>
+                <div className="tech-meta">total payout</div>
+              </div>
+            </div>
+            {Object.values(w.byTech).sort((a, b) => b.amount - a.amount).map(t => (
+              <div className="payout-row" key={t.techId}>
+                <span><b>{nameOf(t.techId)}</b> <span className="tech-meta">· {t.jobCount} {t.jobCount === 1 ? 'job' : 'jobs'}</span></span>
+                <span style={{ fontWeight: 800, color: 'var(--profit)' }}>{fmtMoney2(t.amount)}</span>
+              </div>
+            ))}
+            {owedJobs > 0 && (
+              <div className="hint" style={{ color: 'var(--loss)', marginTop: 6 }}>
+                ⚠ {owedJobs} {owedJobs === 1 ? 'job this week still has' : 'jobs this week still have'} money owed by the customer.
+              </div>
+            )}
+            <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }} onClick={() => toggle(w.key)}>
+              {openWeeks[w.key] ? 'Hide jobs' : `Show ${w.jobs.length} ${w.jobs.length === 1 ? 'job' : 'jobs'}`}
+            </button>
+            {openWeeks[w.key] && (
+              <div style={{ marginTop: 8 }}>
+                {w.jobs.map(({ job, calc, owed }) => (
+                  <div className="payout-job" key={job.id}>
+                    <b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))}
+                    {owed > 0 && <span className="badge badge-owed" style={{ marginLeft: 6 }}>Customer owes {fmtMoney(owed)}</span>}
+                    <div>
+                      {fmtMoney2(job.revenue)} × {calc.commissionPct}% = {fmtMoney2(calc.commissionPool)}
+                      {calc.techCount > 1 ? ` ÷ ${calc.techCount} = ${fmtMoney2(calc.commissionEach)} each` : ''}
+                    </div>
+                    <div>{(job.assignments || []).map(a => nameOf(a.techId)).join(', ')}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function TechsTab({ techs, allTechs, jobs, settings, onAdd, onEdit, onDelete }) {
   return (
     <div>
       <div className="card">
@@ -722,11 +836,13 @@ function TechsTab({ techs, onAdd, onEdit, onDelete }) {
             </div>
             <div>
               <button className="icon-btn" onClick={() => onEdit(t)}>✏️</button>
-              <button className="icon-btn danger" onClick={() => { if (confirm(`Delete ${t.name}? This removes them from any jobs.`)) onDelete(t.id); }}>🗑️</button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${t.name}? They'll come off jobs that aren't completed yet. Completed jobs keep them, so past payouts don't change.`)) onDelete(t.id); }}>🗑️</button>
             </div>
           </div>
         ))}
       </div>
+
+      <WeeklyPayouts jobs={jobs} allTechs={allTechs} settings={settings} />
     </div>
   );
 }
@@ -921,6 +1037,9 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
   const [commissionStr, setCommissionStr] = useState(String(job.commissionPct != null ? job.commissionPct : settings.commissionPct));
   const [assignments, setAssignments] = useState((job.assignments || []).map(a => ({ techId: a.techId })));
 
+  // Removed techs only appear on jobs they were already on, so past jobs still show them.
+  const pickableTechs = techs.filter(t => !t.removed || (job.assignments || []).some(a => a.techId === t.id));
+
   const toggleTech = (tech, checked) => {
     setAssignments(prev => checked ? [...prev, { techId: tech.id }] : prev.filter(a => a.techId !== tech.id));
   };
@@ -1010,9 +1129,9 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
 
         <label style={{ marginTop: 16 }}>Techs Assigned</label>
         <div className="card" style={{ margin: 0, padding: 10 }}>
-          {techs.length === 0 ? (
+          {pickableTechs.length === 0 ? (
             <div className="hint">No techs in your roster yet. Add techs from the Techs tab first.</div>
-          ) : techs.map(t => {
+          ) : pickableTechs.map(t => {
             const a = assignments.find(x => x.techId === t.id);
             return (
               <React.Fragment key={t.id}>
@@ -1203,7 +1322,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
         pay += calc.payByTech[t.id] || 0;
       });
       return { tech: t, revenue, pay, jobCount };
-    });
+    }).filter(pt => !pt.tech.removed || pt.jobCount > 0);
   }, [techs, calcs]);
 
   useEffect(() => {
@@ -1467,7 +1586,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
             </div>
             <div>
               <button className="icon-btn" onClick={() => onEditTech(t)}>✏️</button>
-              <button className="icon-btn danger" onClick={() => { if (confirm(`Delete ${t.name}?`)) onDeleteTech(t.id); }}>🗑️</button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${t.name}? They'll come off jobs that aren't completed yet. Completed jobs keep them, so past payouts don't change.`)) onDeleteTech(t.id); }}>🗑️</button>
             </div>
           </div>
         ))}
