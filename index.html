@@ -261,8 +261,9 @@ const { useState, useEffect, useRef, useMemo } = React;
 const STORAGE_KEY = 'xmasLightsTracker_v1';
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-// Lights are logged once as a business expense, so jobs carry no per-foot material cost.
-const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3 };
+// Lights are logged once as a business expense, so the light cost per foot only shows on the
+// Jobs tab ("with lights" figures). It never reaches the Dashboard, which would count it twice.
+const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5 };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -284,6 +285,8 @@ function legacyLabor(job) {
 function migrate(data) {
   const { perFootRate, materialCostPerFt, ...savedSettings } = data.settings || {};
   const settings = { ...DEFAULT_SETTINGS, ...savedSettings };
+  // Carry over the old material rate if it's still in saved data from before it was removed.
+  if (savedSettings.lightCostPerFt == null && materialCostPerFt != null) settings.lightCostPerFt = Number(materialCostPerFt);
   const techs = (data.techs || []).map(t => ({ id: t.id, name: t.name, ...(t.removed ? { removed: true } : {}) }));
   const jobs = (data.jobs || []).map(j => {
     const isLegacy = j.perFootRate != null || (j.assignments || []).some(a => a.payType);
@@ -389,15 +392,29 @@ function computeJobFinancials(job, settings) {
   const pay = jobPayments(job);
   const cardFees = cardFeeFor(job, 'deposit', pay.deposit, settings) + cardFeeFor(job, 'balance', pay.balance, settings);
 
+  // Dashboard figures: no light cost, since lights are logged as a business expense.
   const laborCost = commissionPool;
   const totalCost = laborCost + misc + cardFees;
   const netProfit = revenue - totalCost;
   const margin = revenue > 0 ? netProfit / revenue : 0;
 
+  // Jobs-tab figures: the same plus the lights this job used, to show its true profit.
+  const feet = Number(job.feet) || 0;
+  const lightCostPerFt = Number(settings.lightCostPerFt) || 0;
+  const lightCost = feet * lightCostPerFt;
+  const costWithLights = totalCost + lightCost;
+  const profitWithLights = revenue - costWithLights;
+  const marginWithLights = revenue > 0 ? profitWithLights / revenue : 0;
+
   const payByTech = {};
   techIds.forEach(id => { payByTech[id] = commissionEach; });
 
-  return { commissionPct, commissionPool, commissionEach, techCount, laborCost, cardFees, totalCost, netProfit, margin, payByTech };
+  return {
+    commissionPct, commissionPool, commissionEach, techCount, laborCost, cardFees,
+    totalCost, netProfit, margin,
+    feet, lightCostPerFt, lightCost, costWithLights, profitWithLights, marginWithLights,
+    payByTech,
+  };
 }
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
@@ -911,8 +928,8 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
     const cmp = {
       scheduled: (a, b) => scheduledOf(a.job).localeCompare(scheduledOf(b.job)),
       date: (a, b) => new Date(b.job.date) - new Date(a.job.date),
-      profit: (a, b) => b.calc.netProfit - a.calc.netProfit,
-      margin: (a, b) => b.calc.margin - a.calc.margin,
+      profit: (a, b) => b.calc.profitWithLights - a.calc.profitWithLights,
+      margin: (a, b) => b.calc.marginWithLights - a.calc.marginWithLights,
       revenue: (a, b) => (Number(b.job.revenue) || 0) - (Number(a.job.revenue) || 0),
       feet: (a, b) => (Number(b.job.feet) || 0) - (Number(a.job.feet) || 0),
     }[sortKey];
@@ -981,9 +998,9 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
             </div>
             <div className="job-metrics">
               <div className="metric"><div className="lbl">Revenue</div><div className="val">{fmtMoney(job.revenue)}</div></div>
-              <div className="metric"><div className="lbl">Cost</div><div className="val">{fmtMoney(calc.totalCost)}</div></div>
-              <div className="metric"><div className="lbl">Profit</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtMoney(calc.netProfit)}</div></div>
-              <div className="metric"><div className="lbl">Margin</div><div className={"val " + (calc.netProfit >= 0 ? 'pos' : 'neg')}>{fmtPct(calc.margin)}</div></div>
+              <div className="metric"><div className="lbl">Cost</div><div className="val">{fmtMoney(calc.costWithLights)}</div></div>
+              <div className="metric"><div className="lbl">Profit</div><div className={"val " + (calc.profitWithLights >= 0 ? 'pos' : 'neg')}>{fmtMoney(calc.profitWithLights)}</div></div>
+              <div className="metric"><div className="lbl">Margin</div><div className={"val " + (calc.profitWithLights >= 0 ? 'pos' : 'neg')}>{fmtPct(calc.marginWithLights)}</div></div>
             </div>
             <div className="pay-row">
               {[['deposit', 'Deposit', 'Deposit 50%', pay.deposit], ['balance', 'Balance', 'Balance due', pay.balance]].map(([which, name, unpaidLabel, amount]) => {
@@ -1163,9 +1180,13 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
           <div className="row"><span className="lab">Commission ({calc.commissionPct}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
           <div className="row"><span className="lab">Card fees</span><span>{fmtMoney2(calc.cardFees)}</span></div>
           <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
-          <div className="row total"><span className="lab">Total cost</span><span>{fmtMoney2(calc.totalCost)}</span></div>
-          <div className="row total"><span className="lab">Net profit</span><span>{fmtMoney2(calc.netProfit)}</span></div>
-          <div className="row"><span className="lab">Margin</span><span>{fmtPct(calc.margin)}</span></div>
+          <div className="row"><span className="lab">Lights ({calc.feet.toLocaleString()} ft × ${calc.lightCostPerFt.toFixed(2)})</span><span>{fmtMoney2(calc.lightCost)}</span></div>
+          <div className="row total"><span className="lab">Total cost</span><span>{fmtMoney2(calc.costWithLights)}</span></div>
+          <div className="row total"><span className="lab">Net profit</span><span>{fmtMoney2(calc.profitWithLights)}</span></div>
+          <div className="row"><span className="lab">Margin</span><span>{fmtPct(calc.marginWithLights)}</span></div>
+        </div>
+        <div className="hint" style={{ marginTop: 6 }}>
+          Lights are only subtracted here and on the Jobs tab. The Dashboard leaves them out because they're logged as an expense, so it will count this job's profit as {fmtMoney2(calc.netProfit)}.
         </div>
 
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
@@ -1382,6 +1403,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
       </div>
       <div className="hint" style={{ marginTop: -6, marginBottom: 12 }}>
         Counts only jobs that are <b>completed and paid in full</b> ({calcs.length} {calcs.length === 1 ? 'job' : 'jobs'}).
+        {' '}Job costs here leave out the lights (they're in Expenses), so job profit runs higher than on the Jobs tab.
         {pending.count > 0 && ` Not counted yet: ${pending.count} ${pending.count === 1 ? 'job' : 'jobs'} worth ${fmtMoney(pending.revenue)} (scheduled, or still owed money).`}
         {totals.cardFees > 0 && ` Costs include ${fmtMoney2(totals.cardFees)} in card fees.`}
       </div>
@@ -1474,6 +1496,12 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
     if (feeStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a card fee between 0 and 100%.'); setFeeStr(String(settings.cardFeePct)); return; }
     setSettings(s => ({ ...s, cardFeePct: v }));
   };
+  const [lightStr, setLightStr] = useState(String(settings.lightCostPerFt));
+  const saveLightCost = () => {
+    const v = Number(lightStr);
+    if (lightStr === '' || isNaN(v) || v < 0) { alert('Enter a valid light cost per foot.'); setLightStr(String(settings.lightCostPerFt)); return; }
+    setSettings(s => ({ ...s, lightCostPerFt: v }));
+  };
   const backups = lsGet(BACKUP_KEY, []).slice().reverse();
 
   const saveCommission = () => {
@@ -1549,6 +1577,17 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
           </div>
         )}
         {authError && <div className="msg-err">{authError}</div>}
+      </div>
+
+      <div className="card">
+        <div className="section-title">Light Cost</div>
+        <label>Cost of Lights per Foot ($/ft)</label>
+        <div className="field-group">
+          <input type="number" inputMode="decimal" min="0" step="0.01" value={lightStr}
+            onChange={e => setLightStr(e.target.value)} onBlur={saveLightCost} />
+          <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveLightCost}>Save</button>
+        </div>
+        <div className="hint">Subtracted from each job on the Jobs tab (feet installed × this rate) so you can see that job's true profit. The Dashboard leaves it out, because the lights are already logged as an expense.</div>
       </div>
 
       <div className="card">
