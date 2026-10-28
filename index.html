@@ -209,6 +209,27 @@
   .checkbox-row:last-child { border-bottom: none; }
   .checkbox-row input[type=checkbox] { width: 19px; height: 19px; accent-color: var(--pine); }
   .checkbox-row .nm { font-weight: 700; flex: 1; }
+  .mini-grid { display: grid; grid-template-columns: 1fr 66px 66px 30px; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .mini-grid input[type=text], .mini-grid input[type=number] { padding: 8px 9px; font-size: 15px; }
+  .mini-head { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 4px; }
+  .drop-zone {
+    display: block; margin: 0; text-align: center; padding: 22px 14px; cursor: pointer;
+    border: 2px dashed var(--border); border-radius: 12px; background: var(--white);
+    color: var(--muted); font-size: 13.5px; font-weight: 500;
+  }
+  .drop-zone.over { border-color: var(--pine3); background: #eef7f1; }
+  .drop-zone.compact { padding: 12px 14px; margin-top: 8px; }
+  .pic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+  .pic-tile { position: relative; aspect-ratio: 1 / 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--white); }
+  .pic-tile img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
+  .pic-placeholder { height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px; font-size: 11.5px; color: var(--muted); }
+  .pic-remove { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
+  .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; border: none; border-radius: 10px; background: rgba(255,255,255,.15); color: #fff; font-size: 34px; cursor: pointer; }
+  .lightbox-nav.prev { left: 10px; }
+  .lightbox-nav.next { right: 10px; }
+  .lightbox { position: fixed; inset: 0; z-index: 70; background: rgba(5,10,8,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; cursor: zoom-out; }
+  .lightbox img { max-width: 100%; max-height: 88vh; object-fit: contain; border-radius: 6px; }
+  .lightbox-close { color: rgba(255,255,255,.75); font-size: 13px; margin-top: 10px; }
   .tech-pct { display: flex; align-items: center; gap: 4px; }
   .checkbox-row input.pct-input { width: 66px; padding: 7px 8px; font-size: 15px; text-align: right; }
   .tech-amt { min-width: 74px; text-align: right; font-weight: 700; color: var(--profit); font-size: 13.5px; }
@@ -266,7 +287,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // Lights are logged once as a business expense, so the light cost per foot only shows on the
 // Jobs tab ("with lights" figures). It never reaches the Dashboard, which would count it twice.
-const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5 };
+const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5 };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -301,7 +322,11 @@ function migrate(data) {
       migrated.commissionPct = revenue > 0 ? legacyLabor(j) / revenue * 100 : 0;
     }
     return migrated;
-  }).map(j => perTechCommission(j, settings));
+  }).map(j => perTechCommission(j, settings)).map(j => {
+    if (!j.mockupId) return j;
+    const { mockupId, ...rest } = j;
+    return { ...rest, mockupIds: j.mockupIds || [mockupId] };
+  });
   return { ...data, techs, jobs, settings };
 }
 
@@ -344,6 +369,102 @@ const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == n
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
 const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length;
 const userDoc = (uid) => FB_DB.collection('users').doc(uid).collection('data').doc('xmasLights');
+
+// ---- Mock-up pictures ----
+// A picture would quickly push the single synced data record past Firestore's ~1 MB limit and
+// break syncing, so each one is shrunk and kept separately: in IndexedDB on the device, and in
+// its own cloud record next to the main one. Jobs only store the pictures' ids (`mockupIds`).
+// (An earlier version allowed one picture, saved as `mockupId`; migrate() converts it.)
+const mockupIdsOf = (job) => job.mockupIds || (job.mockupId ? [job.mockupId] : []);
+const mockupDoc = (uid, id) => FB_DB.collection('users').doc(uid).collection('data').doc('xmasMockup_' + id);
+const IMG_DB_NAME = 'xmasLightsImages';
+const IMG_STORE = 'mockups';
+function imgDb() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(IMG_DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(IMG_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+async function imgTx(mode, fn) {
+  const db = await imgDb();
+  return new Promise((resolve, reject) => {
+    const req = fn(db.transaction(IMG_STORE, mode).objectStore(IMG_STORE));
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+const imgGet = (id) => imgTx('readonly', s => s.get(id)).then(r => r || null);
+const imgPut = (id, rec) => imgTx('readwrite', s => s.put(rec, id));
+const imgDel = (id) => imgTx('readwrite', s => s.delete(id));
+const imgKeys = () => imgTx('readonly', s => s.getAllKeys());
+
+// Shrinks a picture to a JPEG small enough for one cloud record (~700 KB of text at most).
+function compressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error);
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('unreadable'));
+      img.onload = () => {
+        let maxSide = 1600, quality = 0.8, dataUrl = '';
+        for (let i = 0; i < 8; i++) {
+          const scale = Math.min(1, maxSide / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round(img.width * scale));
+          canvas.height = Math.max(1, Math.round(img.height * scale));
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';   // transparent areas would otherwise turn black in a JPEG
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          dataUrl = canvas.toDataURL('image/jpeg', quality);
+          if (dataUrl.length <= 700000) break;
+          maxSide = Math.round(maxSide * 0.8);
+          quality = Math.max(0.5, quality - 0.08);
+        }
+        resolve(dataUrl);
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+// Uploads any pictures saved on this device that haven't reached the cloud yet.
+async function pushPendingMockups() {
+  const user = FB_AUTH && FB_AUTH.currentUser;
+  if (!user || !FB_DB) return;
+  let ids = [];
+  try { ids = await imgKeys(); } catch (e) { return; }
+  for (const id of ids) {
+    try {
+      const rec = await imgGet(id);
+      if (!rec || rec.uploaded) continue;
+      await mockupDoc(user.uid, id).set({ dataUrl: rec.dataUrl, jobId: rec.jobId || '', updatedAt: Date.now() });
+      await imgPut(id, { ...rec, uploaded: true });
+    } catch (e) { console.warn('Mock-up upload failed; will retry', e); }
+  }
+}
+
+// Returns the picture's data URL from this device, or fetches it from the cloud and keeps a copy.
+async function loadMockup(id) {
+  try { const rec = await imgGet(id); if (rec) return rec.dataUrl; } catch (e) {}
+  const user = FB_AUTH && FB_AUTH.currentUser;
+  if (!user || !FB_DB) return null;
+  const snap = await mockupDoc(user.uid, id).get();
+  if (!snap.exists) return null;
+  const d = snap.data();
+  try { await imgPut(id, { dataUrl: d.dataUrl, jobId: d.jobId, uploaded: true }); } catch (e) {}
+  return d.dataUrl;
+}
+
+async function deleteMockup(id) {
+  try { await imgDel(id); } catch (e) {}
+  const user = FB_AUTH && FB_AUTH.currentUser;
+  if (user && FB_DB) { try { await mockupDoc(user.uid, id).delete(); } catch (e) { console.warn('Mock-up delete failed', e); } }
+}
 
 // One rolling snapshot per day (last 14). A smaller snapshot never replaces a bigger one from the same day.
 function autoBackup(data) {
@@ -424,7 +545,8 @@ function computeJobFinancials(job, settings) {
   const feet = Number(job.feet) || 0;
   const lightCostPerFt = Number(settings.lightCostPerFt) || 0;
   const lightCost = feet * lightCostPerFt;
-  const costWithLights = totalCost + lightCost;
+  const mini = miniLightTotals(job, settings);
+  const costWithLights = totalCost + lightCost + mini.cost;
   const profitWithLights = revenue - costWithLights;
   const marginWithLights = revenue > 0 ? profitWithLights / revenue : 0;
 
@@ -434,10 +556,27 @@ function computeJobFinancials(job, settings) {
   return {
     commissionPct, commissionPool, shares, techCount, laborCost, cardFees,
     totalCost, netProfit, margin,
-    feet, lightCostPerFt, lightCost, costWithLights, profitWithLights, marginWithLights,
+    feet, lightCostPerFt, lightCost, mini, costWithLights, profitWithLights, marginWithLights,
     payByTech,
   };
 }
+
+// Mini lights are listed per color with an estimated and an actual number of balls. A row's
+// actual count is what's charged once it's entered; until then its estimate stands in.
+// Like the roofline lights, this only feeds the Jobs-tab "with lights" figures.
+const blankNum = (v) => v === '' || v == null;
+function miniLightTotals(job, settings) {
+  const pricePerBall = Number(settings.miniLightCostPerBall) || 0;
+  let est = 0, actual = 0, charged = 0, usingEstimate = false;
+  (job.miniLights || []).forEach(r => {
+    const e = Number(r.est) || 0;
+    est += e;
+    if (blankNum(r.actual)) { charged += e; if (e) usingEstimate = true; }
+    else { actual += Number(r.actual) || 0; charged += Number(r.actual) || 0; }
+  });
+  return { pricePerBall, est, actual, charged, usingEstimate, cost: charged * pricePerBall };
+}
+const MINI_LIGHT_COLORS = ['Warm White', 'Cool White', 'Multicolor', 'Red', 'Green', 'Blue', 'Purple', 'Orange', 'Pink'];
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
 function jobPayments(job) {
@@ -608,7 +747,7 @@ function App() {
     if (!FB_AUTH) return;
     const unsub = FB_AUTH.onAuthStateChanged(u => {
       setUser(u);
-      if (u) subscribeToCloud(u.uid);
+      if (u) { subscribeToCloud(u.uid); pushPendingMockups(); }
       else if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; cloudReady.current = false; }
     });
     return () => { unsub(); if (snapshotUnsub.current) snapshotUnsub.current(); };
@@ -684,7 +823,11 @@ function App() {
       return exists ? prev.map(x => x.id === j.id ? j : x) : [j, ...prev];
     });
   };
-  const deleteJob = (id) => setJobs(prev => prev.filter(j => j.id !== id));
+  const deleteJob = (id) => {
+    const job = jobs.find(j => j.id === id);
+    if (job) mockupIdsOf(job).forEach(deleteMockup);
+    setJobs(prev => prev.filter(j => j.id !== id));
+  };
   const setPayment = (id, which, paid, method) => setJobs(prev => prev.map(j => j.id !== id ? j
     : { ...withoutPayment(j, which), ...paymentFields(j, which, paid, method, settings) }));
 
@@ -1008,7 +1151,11 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
             <div className="job-top">
               <div>
                 <div className="job-customer">{job.customer || 'Untitled Job'}</div>
-                <div className="job-sub">📅 {fmtDateOnly(scheduledOf(job)) || 'No date'} · {Number(job.feet) || 0} ft</div>
+                <div className="job-sub">
+                  📅 {fmtDateOnly(scheduledOf(job)) || 'No date'} · {(Number(job.feet) || 0).toLocaleString()} ft
+                  {calc.mini.charged > 0 && ` · ${calc.mini.charged} mini ball${calc.mini.charged === 1 ? '' : 's'}${calc.mini.usingEstimate ? ' (est.)' : ''}`}
+                  {mockupIdsOf(job).length > 0 && ` · 🖼️ ${mockupIdsOf(job).length} picture${mockupIdsOf(job).length === 1 ? '' : 's'}`}
+                </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span className={"badge " + (job.status === 'Completed' ? 'badge-done' : 'badge-sched')}>{job.status}</span>
@@ -1101,19 +1248,76 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
     setCustom(Math.abs(total - defaultPct) >= 0.001);
   };
 
+  // Mini lights: one row per color, with estimated and actual balls (kept as text while editing).
+  const [miniLights, setMiniLights] = useState(() => (job.miniLights || []).map(r => ({
+    id: r.id || uid(), color: r.color || '',
+    est: blankNum(r.est) ? '' : String(r.est), actual: blankNum(r.actual) ? '' : String(r.actual),
+  })));
+  const addMiniRow = () => setMiniLights(rows => [...rows, { id: uid(), color: '', est: '', actual: '' }]);
+  const updateMini = (id, patch) => setMiniLights(rows => rows.map(r => r.id === id ? { ...r, ...patch } : r));
+  const removeMini = (id) => setMiniLights(rows => rows.filter(r => r.id !== id));
+
+  // Mock-up pictures. Each tile is { key, id, url, state }: state is 'loading', 'ready',
+  // 'missing' (saved, but not on this device yet) or 'new' (chosen now, stored on Save).
+  // Adding or removing pictures only takes effect when the job is saved.
+  const [pics, setPics] = useState(() => mockupIdsOf(job).map(id => ({ key: id, id, url: null, state: 'loading' })));
+  const [removedIds, setRemovedIds] = useState([]);
+  const [picMsg, setPicMsg] = useState('');
+  const [dragOver, setDragOver] = useState(false);
+  const [viewing, setViewing] = useState(null); // key of the picture shown full size
+  useEffect(() => {
+    let alive = true;
+    mockupIdsOf(job).forEach(id => {
+      loadMockup(id)
+        .then(url => alive && setPics(ps => ps.map(p => p.id === id ? { ...p, url, state: url ? 'ready' : 'missing' } : p)))
+        .catch(() => alive && setPics(ps => ps.map(p => p.id === id ? { ...p, state: 'missing' } : p)));
+    });
+    return () => { alive = false; };
+  }, []);
+  const addFiles = async (fileList) => {
+    const all = [...(fileList || [])];
+    const files = all.filter(f => f.type.startsWith('image/'));
+    if (!files.length) { if (all.length) setPicMsg('Those files aren’t pictures.'); return; }
+    setPicMsg(`Preparing ${files.length} picture${files.length === 1 ? '' : 's'}…`);
+    let failed = 0;
+    for (const f of files) {
+      try {
+        const url = await compressImage(f);
+        setPics(ps => [...ps, { key: uid(), id: null, url, state: 'new' }]);
+      } catch (e) { failed++; }
+    }
+    setPicMsg(failed ? `${failed} picture${failed === 1 ? '' : 's'} couldn’t be read. Try JPG or PNG.` : '');
+  };
+  const removePic = (key) => {
+    const p = pics.find(x => x.key === key);
+    if (p && p.id) setRemovedIds(r => [...r, p.id]);
+    setPics(ps => ps.filter(x => x.key !== key));
+  };
+  const viewable = pics.filter(p => p.url);
+  const viewIndex = viewable.findIndex(p => p.key === viewing);
+  const stepView = (dir) => setViewing(viewable[(viewIndex + dir + viewable.length) % viewable.length].key);
+
   const previewJob = {
     feet: Number(feet) || 0,
     revenue: Number(revenue) || 0,
     miscCost: Number(miscCost) || 0,
     assignments: assignments.map(a => ({ techId: a.techId, pct: a.pct })),
+    miniLights,
     ...payFields,
   };
   const calc = computeJobFinancials(previewJob, settings);
   const pay = jobPayments(previewJob);
 
-  const save = () => {
+  const save = async () => {
     if (!customer.trim()) { alert('Enter a customer name.'); return; }
     if (feet === '' || isNaN(Number(feet)) || Number(feet) < 0) { alert('Enter valid feet installed.'); return; }
+    for (const r of miniLights) {
+      for (const [key, what] of [['est', 'estimated'], ['actual', 'actual']]) {
+        if (!blankNum(r[key]) && (isNaN(Number(r[key])) || Number(r[key]) < 0)) {
+          alert(`Enter a valid ${what} number of mini light balls${r.color ? ' for ' + r.color : ''}.`); return;
+        }
+      }
+    }
     if (revenue === '' || isNaN(Number(revenue)) || Number(revenue) < 0) { alert('Enter a valid revenue amount.'); return; }
     for (const a of assignments) {
       const typed = a.text !== undefined ? a.text : String(a.pct);
@@ -1124,9 +1328,32 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
       }
     }
     if (calc.commissionPct > 100) { alert('Total commission can’t be more than 100% of the job.'); return; }
+
+    const jobId = job.id || uid();
+    // Keep the pictures in the order shown. Ones not on this device yet are kept, not dropped.
+    const mockupIds = [];
+    let storeFailed = 0;
+    for (const p of pics) {
+      if (p.state !== 'new') { mockupIds.push(p.id); continue; }
+      const newId = uid();
+      try {
+        await imgPut(newId, { dataUrl: p.url, jobId, uploaded: false });
+        mockupIds.push(newId);
+      } catch (e) { storeFailed++; }
+    }
+    if (storeFailed) alert(`Couldn’t store ${storeFailed} new picture${storeFailed === 1 ? '' : 's'} on this device, so the job will be saved without ${storeFailed === 1 ? 'it' : 'them'}.`);
+
     onSave({
-      id: job.id || uid(),
+      id: jobId,
       customer: customer.trim(),
+      miniLights: miniLights
+        .filter(r => r.color.trim() || !blankNum(r.est) || !blankNum(r.actual))
+        .map(r => ({
+          id: r.id, color: r.color.trim(),
+          est: blankNum(r.est) ? null : Number(r.est),
+          actual: blankNum(r.actual) ? null : Number(r.actual),
+        })),
+      ...(mockupIds.length ? { mockupIds } : {}),
       feet: Number(feet),
       revenue: Number(revenue),
       status,
@@ -1137,6 +1364,8 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
       date,
       assignments: previewJob.assignments,
     });
+    removedIds.forEach(deleteMockup);
+    pushPendingMockups();
   };
 
   return (
@@ -1163,6 +1392,79 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
             <input type="number" inputMode="decimal" min="0" step="1" value={revenue} onChange={e => setRevenue(e.target.value)} placeholder="0" />
           </div>
         </div>
+
+        <label style={{ marginTop: 16 }}>Mini Lights</label>
+        <div className="card" style={{ margin: 0, padding: 10 }}>
+          {miniLights.length === 0 ? (
+            <div className="hint" style={{ marginTop: 0 }}>No mini lights on this job yet.</div>
+          ) : (
+            <div className="mini-grid mini-head"><span>Color</span><span>Est. balls</span><span>Actual</span><span></span></div>
+          )}
+          {miniLights.map(r => (
+            <div className="mini-grid" key={r.id}>
+              <input type="text" list="mini-light-colors" value={r.color} placeholder="Color"
+                onChange={e => updateMini(r.id, { color: e.target.value })} aria-label="Mini light color" />
+              <input type="number" inputMode="numeric" min="0" step="1" value={r.est} placeholder="0"
+                onChange={e => updateMini(r.id, { est: e.target.value })} aria-label="Estimated balls" />
+              <input type="number" inputMode="numeric" min="0" step="1" value={r.actual} placeholder="—"
+                onChange={e => updateMini(r.id, { actual: e.target.value })} aria-label="Actual balls used" />
+              <button className="icon-btn danger" onClick={() => removeMini(r.id)} aria-label="Remove this color">✕</button>
+            </div>
+          ))}
+          <datalist id="mini-light-colors">{MINI_LIGHT_COLORS.map(c => <option key={c} value={c} />)}</datalist>
+          <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={addMiniRow}>+ Add color</button>
+        </div>
+        {miniLights.length > 0 && (
+          <div className="hint">
+            Estimated: <b>{calc.mini.est} balls</b> ({fmtMoney2(calc.mini.est * calc.mini.pricePerBall)})
+            {calc.mini.actual > 0 && <React.Fragment> · Used: <b>{calc.mini.actual} balls</b> ({fmtMoney2(calc.mini.actual * calc.mini.pricePerBall)})</React.Fragment>}
+            {' '}at {fmtMoney2(calc.mini.pricePerBall)} a ball. Each color’s actual count is what’s charged once you enter it; until then its estimate is used.
+          </div>
+        )}
+        {status === 'Completed' && calc.mini.usingEstimate && (
+          <div className="hint" style={{ color: 'var(--loss)' }}>⚠ This job is completed — enter the actual mini lights used.</div>
+        )}
+
+        <label style={{ marginTop: 16 }}>Mock-up Pictures{pics.length > 0 ? ` (${pics.length})` : ''}</label>
+        {pics.length > 0 && (
+          <div className="pic-grid">
+            {pics.map((p, i) => (
+              <div className="pic-tile" key={p.key}>
+                {p.url
+                  ? <img src={p.url} alt={`Mock-up ${i + 1}`} onClick={() => setViewing(p.key)} />
+                  : <div className="pic-placeholder">{p.state === 'loading' ? 'Loading…' : 'Not on this device yet'}</div>}
+                <button className="pic-remove" onClick={() => removePic(p.key)} aria-label={`Remove picture ${i + 1}`}>✕</button>
+              </div>
+            ))}
+          </div>
+        )}
+        <label className={'drop-zone' + (dragOver ? ' over' : '') + (pics.length ? ' compact' : '')}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={e => { e.preventDefault(); setDragOver(false); addFiles(e.dataTransfer.files); }}>
+          {pics.length === 0 && <div style={{ fontSize: 26 }}>🖼️</div>}
+          <div>{pics.length === 0
+            ? <React.Fragment><b>Drop mock-up pictures here</b> or tap to choose — you can add several</React.Fragment>
+            : <React.Fragment><b>+ Add more pictures</b> (drop or tap)</React.Fragment>}</div>
+          <input type="file" accept="image/*" multiple style={{ display: 'none' }}
+            onChange={e => { addFiles(e.target.files); e.target.value = ''; }} />
+        </label>
+        {picMsg && <div className="hint">{picMsg}</div>}
+        {pics.some(p => p.state === 'missing') && (
+          <div className="hint">Some pictures aren’t on this device yet. They appear once the device that added them is online and signed in to Google sync.</div>
+        )}
+        {viewIndex >= 0 && (
+          <div className="lightbox" onClick={() => setViewing(null)}>
+            <img src={viewable[viewIndex].url} alt={`Mock-up ${viewIndex + 1}, full size`} />
+            {viewable.length > 1 && (
+              <React.Fragment>
+                <button className="lightbox-nav prev" onClick={e => { e.stopPropagation(); stepView(-1); }} aria-label="Previous picture">‹</button>
+                <button className="lightbox-nav next" onClick={e => { e.stopPropagation(); stepView(1); }} aria-label="Next picture">›</button>
+              </React.Fragment>
+            )}
+            <div className="lightbox-close">{viewable.length > 1 ? `${viewIndex + 1} of ${viewable.length} · ` : ''}Tap anywhere to close</div>
+          </div>
+        )}
 
         <label>Status</label>
         <div className="pill-group">
@@ -1234,6 +1536,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
           <div className="row"><span className="lab">Card fees</span><span>{fmtMoney2(calc.cardFees)}</span></div>
           <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
           <div className="row"><span className="lab">Lights ({calc.feet.toLocaleString()} ft × ${calc.lightCostPerFt.toFixed(2)})</span><span>{fmtMoney2(calc.lightCost)}</span></div>
+          <div className="row"><span className="lab">Mini lights ({calc.mini.charged} balls × {fmtMoney2(calc.mini.pricePerBall)}{calc.mini.usingEstimate ? ', est.' : ''})</span><span>{fmtMoney2(calc.mini.cost)}</span></div>
           <div className="row total"><span className="lab">Total cost</span><span>{fmtMoney2(calc.costWithLights)}</span></div>
           <div className="row total"><span className="lab">Net profit</span><span>{fmtMoney2(calc.profitWithLights)}</span></div>
           <div className="row"><span className="lab">Margin</span><span>{fmtPct(calc.marginWithLights)}</span></div>
@@ -1549,6 +1852,12 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
     if (feeStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a card fee between 0 and 100%.'); setFeeStr(String(settings.cardFeePct)); return; }
     setSettings(s => ({ ...s, cardFeePct: v }));
   };
+  const [miniStr, setMiniStr] = useState(String(settings.miniLightCostPerBall));
+  const saveMiniCost = () => {
+    const v = Number(miniStr);
+    if (miniStr === '' || isNaN(v) || v < 0) { alert('Enter a valid cost per ball of mini lights.'); setMiniStr(String(settings.miniLightCostPerBall)); return; }
+    setSettings(s => ({ ...s, miniLightCostPerBall: v }));
+  };
   const [lightStr, setLightStr] = useState(String(settings.lightCostPerFt));
   const saveLightCost = () => {
     const v = Number(lightStr);
@@ -1633,14 +1942,20 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
       </div>
 
       <div className="card">
-        <div className="section-title">Light Cost</div>
+        <div className="section-title">Light Costs</div>
         <label>Cost of Lights per Foot ($/ft)</label>
         <div className="field-group">
           <input type="number" inputMode="decimal" min="0" step="0.01" value={lightStr}
             onChange={e => setLightStr(e.target.value)} onBlur={saveLightCost} />
           <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveLightCost}>Save</button>
         </div>
-        <div className="hint">Subtracted from each job on the Jobs tab (feet installed × this rate) so you can see that job's true profit. The Dashboard leaves it out, because the lights are already logged as an expense.</div>
+        <label>Cost per Ball of Mini Lights ($)</label>
+        <div className="field-group">
+          <input type="number" inputMode="decimal" min="0" step="0.01" value={miniStr}
+            onChange={e => setMiniStr(e.target.value)} onBlur={saveMiniCost} />
+          <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveMiniCost}>Save</button>
+        </div>
+        <div className="hint">Both are subtracted from each job on the Jobs tab (feet installed, and mini light balls used) so you can see that job's true profit. The Dashboard leaves them out, because the lights are already logged as an expense.</div>
       </div>
 
       <div className="card">
@@ -1718,7 +2033,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
 
       <div className="card">
         <div className="section-title">Backup File</div>
-        <div className="hint" style={{ marginBottom: 10 }}>Save all your data to a file, or load it from one — for moving data between copies of the app or keeping your own backup.</div>
+        <div className="hint" style={{ marginBottom: 10 }}>Save all your data to a file, or load it from one — for moving data between copies of the app or keeping your own backup. Mock-up pictures aren’t included in the file.</div>
         <div className="field-group">
           <button className="btn btn-primary" style={{ flex: 1 }} onClick={exportBackup}>Export backup</button>
           <label className="btn btn-ghost" style={{ flex: 1, margin: 0, color: 'var(--text)', fontSize: 14.5 }}>
