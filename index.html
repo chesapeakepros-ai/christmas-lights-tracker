@@ -209,6 +209,9 @@
   .checkbox-row:last-child { border-bottom: none; }
   .checkbox-row input[type=checkbox] { width: 19px; height: 19px; accent-color: var(--pine); }
   .checkbox-row .nm { font-weight: 700; flex: 1; }
+  .tech-pct { display: flex; align-items: center; gap: 4px; }
+  .checkbox-row input.pct-input { width: 66px; padding: 7px 8px; font-size: 15px; text-align: right; }
+  .tech-amt { min-width: 74px; text-align: right; font-weight: 700; color: var(--profit); font-size: 13.5px; }
 
   /* Modal */
   .modal-overlay {
@@ -279,9 +282,9 @@ function legacyLabor(job) {
   return hourly + feet * (rate || 0);
 }
 
-// Pay used to be hourly or per-foot; it is now a commission (% of job revenue) split evenly
-// between the job's techs. Completed jobs are locked to the % that reproduces the labor they
-// actually cost, so past profit doesn't shift; scheduled jobs follow the current default.
+// Pay used to be hourly or per-foot; it is now commission (% of job revenue). Completed jobs
+// from the old pay model get the % that reproduces the labor they actually cost, so past
+// profit doesn't shift. Every job then gets a % per tech (see perTechCommission).
 function migrate(data) {
   const { perFootRate, materialCostPerFt, ...savedSettings } = data.settings || {};
   const settings = { ...DEFAULT_SETTINGS, ...savedSettings };
@@ -295,12 +298,27 @@ function migrate(data) {
     const migrated = { ...rest, assignments: (j.assignments || []).map(a => ({ techId: a.techId })) };
     if (j.status === 'Completed' && j.commissionPct == null) {
       const revenue = Number(j.revenue) || 0;
-      migrated.commissionPct = revenue > 0 ? Math.round(legacyLabor(j) / revenue * 1e6) / 1e4 : 0;
+      migrated.commissionPct = revenue > 0 ? legacyLabor(j) / revenue * 100 : 0;
     }
     return migrated;
-  });
+  }).map(j => perTechCommission(j, settings));
   return { ...data, techs, jobs, settings };
 }
+
+// Commission used to be one % per job, split evenly between its techs; each tech now has
+// their own % of the job's revenue (`assignment.pct`). Convert using the even split the
+// job was already paying, so no job's commission or anyone's payout changes.
+function perTechCommission(job, settings) {
+  const assigns = job.assignments || [];
+  if (job.commissionPct == null && !assigns.some(a => a.pct == null)) return job;
+  const { commissionPct, ...rest } = job;
+  const jobPct = Number(commissionPct != null ? commissionPct : settings.commissionPct) || 0;
+  // Kept unrounded (e.g. exactly a third) so split payouts still add up to the cent.
+  const share = assigns.length ? jobPct / assigns.length : 0;
+  return { ...rest, assignments: assigns.map(a => ({ techId: a.techId, pct: a.pct != null ? Number(a.pct) || 0 : share })) };
+}
+// Percentages are stored unrounded; this is for display only.
+const pct2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 function loadData() {
   const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS } };
@@ -381,13 +399,17 @@ function computeJobFinancials(job, settings) {
   const revenue = Number(job.revenue) || 0;
   const misc = Number(job.miscCost) || 0;
 
-  // Commission is a % of job revenue, split evenly between the techs on the job.
-  // A job with no techs assigned pays no commission.
-  const techIds = (job.assignments || []).map(a => a.techId);
-  const techCount = techIds.length;
-  const commissionPct = Number(job.commissionPct != null ? job.commissionPct : settings.commissionPct) || 0;
-  const commissionPool = techCount ? revenue * commissionPct / 100 : 0;
-  const commissionEach = techCount ? commissionPool / techCount : 0;
+  // Each tech on the job earns their own % of the job's revenue. A tech with no % yet (data
+  // from an older version not converted) gets the even split of the job's old single %.
+  const assigns = job.assignments || [];
+  const techCount = assigns.length;
+  const evenShare = techCount ? (Number(job.commissionPct != null ? job.commissionPct : settings.commissionPct) || 0) / techCount : 0;
+  const shares = assigns.map(a => {
+    const pct = a.pct != null ? Number(a.pct) || 0 : evenShare;
+    return { techId: a.techId, pct, amount: revenue * pct / 100 };
+  });
+  const commissionPct = shares.reduce((s, x) => s + x.pct, 0);
+  const commissionPool = shares.reduce((s, x) => s + x.amount, 0);
 
   const pay = jobPayments(job);
   const cardFees = cardFeeFor(job, 'deposit', pay.deposit, settings) + cardFeeFor(job, 'balance', pay.balance, settings);
@@ -407,10 +429,10 @@ function computeJobFinancials(job, settings) {
   const marginWithLights = revenue > 0 ? profitWithLights / revenue : 0;
 
   const payByTech = {};
-  techIds.forEach(id => { payByTech[id] = commissionEach; });
+  shares.forEach(s => { payByTech[s.techId] = (payByTech[s.techId] || 0) + s.amount; });
 
   return {
-    commissionPct, commissionPool, commissionEach, techCount, laborCost, cardFees,
+    commissionPct, commissionPool, shares, techCount, laborCost, cardFees,
     totalCost, netProfit, margin,
     feet, lightCostPerFt, lightCost, costWithLights, profitWithLights, marginWithLights,
     payByTech,
@@ -816,11 +838,8 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
                   <div className="payout-job" key={job.id}>
                     <b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))}
                     {owed > 0 && <span className="badge badge-owed" style={{ marginLeft: 6 }}>Customer owes {fmtMoney(owed)}</span>}
-                    <div>
-                      {fmtMoney2(job.revenue)} × {calc.commissionPct}% = {fmtMoney2(calc.commissionPool)}
-                      {calc.techCount > 1 ? ` ÷ ${calc.techCount} = ${fmtMoney2(calc.commissionEach)} each` : ''}
-                    </div>
-                    <div>{(job.assignments || []).map(a => nameOf(a.techId)).join(', ')}</div>
+                    <div>{fmtMoney2(job.revenue)} job · {pct2(calc.commissionPct)}% commission = {fmtMoney2(calc.commissionPool)}</div>
+                    <div>{calc.shares.map(s => `${nameOf(s.techId)} ${pct2(s.pct)}% = ${fmtMoney2(s.amount)}`).join(' · ')}</div>
                   </div>
                 ))}
               </div>
@@ -884,7 +903,7 @@ function TechModal({ tech, onClose, onSave }) {
         <label>Tech Name</label>
         <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mike Johnson" autoFocus />
         <div className="hint" style={{ marginTop: 10 }}>
-          Techs are paid a commission on each job they work, split evenly with the other techs on that job. Set the % in Settings, or per job.
+          Techs earn a commission % of each job they work. You set each tech's % on the job; new jobs start with your default from Settings, split evenly.
         </div>
 
         <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
@@ -1051,22 +1070,42 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
     ...paymentFields(job, 'deposit', deposit.paid, deposit.method, settings),
     ...paymentFields(job, 'balance', balance.paid, balance.method, settings),
   };
-  const [commissionStr, setCommissionStr] = useState(String(job.commissionPct != null ? job.commissionPct : settings.commissionPct));
-  const [assignments, setAssignments] = useState((job.assignments || []).map(a => ({ techId: a.techId })));
+  // Each assigned tech has their own commission % (`pct`, unrounded). `text` holds what was
+  // typed while editing; a % that wasn't typed keeps full precision instead of the rounded
+  // number shown, so an exact third stays exact when the job is saved again.
+  const defaultPct = Number(settings.commissionPct) || 0;
+  const evenSplit = (list, total) => list.map(a => ({ techId: a.techId, pct: total / list.length }));
+  const isEvenDefault = (list) => list.every(a => Math.abs(a.pct - defaultPct / list.length) < 0.001);
+  const [assignments, setAssignments] = useState(() =>
+    computeJobFinancials(job, settings).shares.map(s => ({ techId: s.techId, pct: s.pct })));
+  // Until a tech's % is changed by hand, adding or removing techs re-splits the default evenly.
+  const [custom, setCustom] = useState(() => assignments.length > 0 && !isEvenDefault(assignments));
+  const pctText = (a) => a.text !== undefined ? a.text : String(pct2(a.pct));
 
   // Removed techs only appear on jobs they were already on, so past jobs still show them.
   const pickableTechs = techs.filter(t => !t.removed || (job.assignments || []).some(a => a.techId === t.id));
 
   const toggleTech = (tech, checked) => {
-    setAssignments(prev => checked ? [...prev, { techId: tech.id }] : prev.filter(a => a.techId !== tech.id));
+    setAssignments(prev => {
+      const next = checked ? [...prev, { techId: tech.id, pct: 0 }] : prev.filter(a => a.techId !== tech.id);
+      return custom || next.length === 0 ? next : evenSplit(next, defaultPct);
+    });
+  };
+  const setTechPct = (techId, value) => {
+    setCustom(true);
+    setAssignments(prev => prev.map(a => a.techId === techId ? { ...a, text: value, pct: Number(value) || 0 } : a));
+  };
+  const splitEvenly = () => {
+    const total = assignments.reduce((s, a) => s + a.pct, 0) || defaultPct;
+    setAssignments(evenSplit(assignments, total));
+    setCustom(Math.abs(total - defaultPct) >= 0.001);
   };
 
   const previewJob = {
     feet: Number(feet) || 0,
     revenue: Number(revenue) || 0,
     miscCost: Number(miscCost) || 0,
-    commissionPct: Number(commissionStr) || 0,
-    assignments,
+    assignments: assignments.map(a => ({ techId: a.techId, pct: a.pct })),
     ...payFields,
   };
   const calc = computeJobFinancials(previewJob, settings);
@@ -1076,11 +1115,15 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
     if (!customer.trim()) { alert('Enter a customer name.'); return; }
     if (feet === '' || isNaN(Number(feet)) || Number(feet) < 0) { alert('Enter valid feet installed.'); return; }
     if (revenue === '' || isNaN(Number(revenue)) || Number(revenue) < 0) { alert('Enter a valid revenue amount.'); return; }
-    const pct = Number(commissionStr);
-    if (commissionStr === '' || isNaN(pct) || pct < 0 || pct > 100) { alert('Enter a commission between 0 and 100%.'); return; }
-    // A scheduled job left at the default keeps following the default; a custom % or a
-    // completed job locks in its own %, so changing the default later can't rewrite it.
-    const followsDefault = status !== 'Completed' && pct === Number(settings.commissionPct);
+    for (const a of assignments) {
+      const typed = a.text !== undefined ? a.text : String(a.pct);
+      const p = Number(typed);
+      if (typed === '' || isNaN(p) || p < 0 || p > 100) {
+        const name = (techs.find(t => t.id === a.techId) || {}).name || 'a tech';
+        alert(`Enter a commission between 0 and 100% for ${name}.`); return;
+      }
+    }
+    if (calc.commissionPct > 100) { alert('Total commission can’t be more than 100% of the job.'); return; }
     onSave({
       id: job.id || uid(),
       customer: customer.trim(),
@@ -1089,11 +1132,10 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
       status,
       scheduledDate,
       ...payFields,
-      ...(followsDefault ? {} : { commissionPct: pct }),
       miscCost: Number(miscCost) || 0,
       miscNote: miscNote.trim(),
       date,
-      assignments,
+      assignments: previewJob.assignments,
     });
   };
 
@@ -1155,21 +1197,32 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
                 <div className="checkbox-row">
                   <input type="checkbox" checked={!!a} onChange={e => toggleTech(t, e.target.checked)} />
                   <div className="nm">{t.name}</div>
-                  {a && <div className="tech-meta" style={{ fontWeight: 700, color: 'var(--profit)' }}>{fmtMoney2(calc.commissionEach)}</div>}
+                  {a && (
+                    <div className="tech-pct">
+                      <input className="pct-input" type="number" inputMode="decimal" min="0" max="100" step="0.5"
+                        value={pctText(a)} onChange={e => setTechPct(t.id, e.target.value)} aria-label={`${t.name} commission %`} />
+                      <span className="tech-meta">%</span>
+                      <span className="tech-amt">{fmtMoney2(calc.payByTech[t.id] || 0)}</span>
+                    </div>
+                  )}
                 </div>
               </React.Fragment>
             );
           })}
         </div>
-
-        <label>Commission (% of job revenue)</label>
-        <input type="number" inputMode="decimal" min="0" max="100" step="0.5" value={commissionStr} onChange={e => setCommissionStr(e.target.value)} placeholder="0" />
-        <div className="hint">
+        <div className="hint" style={{ marginTop: 6 }}>
           {calc.techCount === 0
-            ? 'No techs assigned yet, so no commission is counted.'
-            : `${(Number(commissionStr) || 0)}% of ${fmtMoney2(previewJob.revenue)} = ${fmtMoney2(calc.commissionPool)}, split evenly between ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'} (${fmtMoney2(calc.commissionEach)} each).`}
-          {Number(commissionStr) !== Number(settings.commissionPct) && ` Your default is ${settings.commissionPct}%.`}
+            ? `No techs assigned yet, so no commission is counted. Techs you add start with your ${defaultPct}% default, split evenly; then change anyone's %.`
+            : <React.Fragment>
+                Commission: <b>{pct2(calc.commissionPct)}%</b> of {fmtMoney2(previewJob.revenue)} = <b>{fmtMoney2(calc.commissionPool)}</b>.
+                {' '}Each tech's % is of the whole job's revenue.
+              </React.Fragment>}
         </div>
+        {calc.techCount > 1 && (
+          <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={splitEvenly}>
+            Split {pct2(calc.commissionPct || defaultPct)}% evenly
+          </button>
+        )}
 
         <label>Misc / Materials Cost ($)</label>
         <input type="number" inputMode="decimal" min="0" step="0.01" value={miscCost} onChange={e => setMiscCost(e.target.value)} placeholder="0.00" />
@@ -1177,7 +1230,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
         <input type="text" value={miscNote} onChange={e => setMiscNote(e.target.value)} placeholder="clips, timers, extension cords, gas..." />
 
         <div className="summary-box">
-          <div className="row"><span className="lab">Commission ({calc.commissionPct}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
+          <div className="row"><span className="lab">Commission ({pct2(calc.commissionPct)}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
           <div className="row"><span className="lab">Card fees</span><span>{fmtMoney2(calc.cardFees)}</span></div>
           <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
           <div className="row"><span className="lab">Lights ({calc.feet.toLocaleString()} ft × ${calc.lightCostPerFt.toFixed(2)})</span><span>{fmtMoney2(calc.lightCost)}</span></div>
@@ -1592,13 +1645,13 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
 
       <div className="card">
         <div className="section-title">Tech Commission</div>
-        <label>Default Commission (% of job revenue)</label>
+        <label>Starting Commission per Job (% of job revenue)</label>
         <div className="field-group">
           <input type="number" inputMode="decimal" min="0" max="100" step="0.5" value={commStr}
             onChange={e => setCommStr(e.target.value)} onBlur={saveCommission} />
           <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveCommission}>Save</button>
         </div>
-        <div className="hint">Each job pays this % of its revenue as commission, split evenly between the techs who worked it. You can change it on any single job. Completed jobs lock in their %, so changing this later only affects scheduled jobs.</div>
+        <div className="hint">When you add techs to a job, this % of the job's revenue is split evenly between them as a starting point. Then set any tech's own % on that job. Each job keeps the %s it was saved with, so changing this only affects jobs you set up afterwards.</div>
       </div>
 
       <div className="card">
