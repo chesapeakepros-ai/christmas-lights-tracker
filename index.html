@@ -209,6 +209,23 @@
   .checkbox-row:last-child { border-bottom: none; }
   .checkbox-row input[type=checkbox] { width: 19px; height: 19px; accent-color: var(--pine); }
   .checkbox-row .nm { font-weight: 700; flex: 1; }
+  .color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  .color-pill { padding: 8px 6px; line-height: 1.25; }
+  .color-sub { font-size: 11px; font-weight: 500; opacity: .8; }
+  .inv-grid { display: grid; grid-template-columns: 1fr 76px 58px 74px; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
+  .other-grid { display: grid; grid-template-columns: 1fr 64px 1fr 30px; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .inv-grid input, .other-grid input { padding: 7px 8px; font-size: 15px; }
+  .inv-head { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; padding: 0 0 4px; }
+  .inv-name { font-weight: 700; font-size: 14px; cursor: pointer; }
+  .inv-name-edit { display: flex; align-items: center; gap: 2px; }
+  .inv-num { text-align: right; font-weight: 600; font-size: 14px; }
+  .inv-left { text-align: right; font-weight: 800; font-size: 13.5px; }
+  .inv-left.ok { color: var(--profit); }
+  .inv-left.short { color: var(--loss); }
+  .inv-uses { background: var(--bg); border-radius: 8px; padding: 4px 10px; margin: 4px 0 8px; font-size: 12.5px; color: var(--muted); }
+  .inv-use { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); cursor: pointer; font-size: 12.5px; }
+  .inv-use:last-child { border-bottom: none; }
+  .inv-use b { color: var(--text); }
   .mini-grid { display: grid; grid-template-columns: 1fr 66px 66px 30px; gap: 6px; align-items: center; margin-bottom: 6px; }
   .mini-grid input[type=text], .mini-grid input[type=number] { padding: 8px 9px; font-size: 15px; }
   .mini-head { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 4px; }
@@ -287,7 +304,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // Lights are logged once as a business expense, so the light cost per foot only shows on the
 // Jobs tab ("with lights" figures). It never reaches the Dashboard, which would count it twice.
-const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5 };
+const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15 };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -327,7 +344,10 @@ function migrate(data) {
     const { mockupId, ...rest } = j;
     return { ...rest, mockupIds: j.mockupIds || [mockupId] };
   });
-  return { ...data, techs, jobs, settings };
+  // Roofline used to be stocked as feet per color; it's now bulbs per color at the line spacing.
+  const inventory = (Array.isArray(data.inventory) ? data.inventory : []).map(i => i.kind !== 'roofline' ? i
+    : { ...i, kind: 'bulb', qty: socketsFor(Number(i.qty) || 0, settings) });
+  return { ...data, techs, jobs, settings, inventory };
 }
 
 // Commission used to be one % per job, split evenly between its techs; each tech now has
@@ -346,7 +366,7 @@ function perTechCommission(job, settings) {
 const pct2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 function loadData() {
-  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS } };
+  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS }, inventory: [] };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return migrate({ ...fallback, ...JSON.parse(raw) });
@@ -367,7 +387,7 @@ const TS_KEY = 'xmasLightsUpdatedAt';
 const BACKUP_KEY = 'xmasLightsBackups';
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
-const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length;
+const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length + (d.inventory || []).length;
 const userDoc = (uid) => FB_DB.collection('users').doc(uid).collection('data').doc('xmasLights');
 
 // ---- Mock-up pictures ----
@@ -578,6 +598,79 @@ function miniLightTotals(job, settings) {
 }
 const MINI_LIGHT_COLORS = ['Warm White', 'Cool White', 'Multicolor', 'Red', 'Green', 'Blue', 'Purple', 'Orange', 'Pink'];
 
+// ---- Inventory ----
+// Roofline is stocked as line (feet, socketed every `bulbSpacingIn` inches) plus bulbs counted
+// per base color. A job uses its feet of line, and one bulb per socket. Its roofline color is a
+// pattern repeated along the line, so the bulbs are dealt out across the pattern's colors in order.
+const ROOFLINE_BASE_COLORS = ['Warm White', 'Pure White', 'Red', 'Green', 'Multicolor'];
+const ROOFLINE_PATTERNS = {
+  'Warm White': ['Warm White'],
+  'Candy Cane': ['Red', 'Pure White'],
+  'Classic Christmas': ['Red', 'Green', 'Pure White'],
+  'Multicolor': ['Multicolor'],
+};
+const spacingOf = (settings) => Number(settings.bulbSpacingIn) || 15;
+// Sockets (= bulbs) on `feet` of line, rounded up so every socket gets a bulb.
+const socketsFor = (feet, settings) => feet > 0 ? Math.ceil(feet * 12 / spacingOf(settings) - 1e-9) : 0;
+// Bulbs per color for one run: the pattern repeats in order, so any leftover goes to its first colors.
+function bulbsByColor(pattern, sockets) {
+  const base = Math.floor(sockets / pattern.length);
+  const extra = sockets % pattern.length;
+  return pattern.map((color, i) => [color, base + (i < extra ? 1 : 0)]);
+}
+const ROOFLINE_PATTERN_HINTS = {
+  'Warm White': 'warm white',
+  'Candy Cane': 'red & pure white',
+  'Classic Christmas': 'red, green & pure white',
+  'Multicolor': 'multicolor',
+};
+// Inventory items: { id, kind: 'line' | 'bulb' | 'mini' | 'other', name, qty, note }.
+// (A first version stocked roofline as feet per color, kind 'roofline'; migrate() converts it.)
+const sameName = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
+
+// The install season runs July 1 to June 30. Only jobs scheduled this season use up stock;
+// earlier seasons' jobs drop off on their own.
+function currentSeason(today = todayYMD()) {
+  const [y, m] = today.split('-').map(Number);
+  const start = m >= 7 ? y : y - 1;
+  return { start: `${start}-07-01`, end: `${start + 1}-06-30`, label: `Jul 1, ${start} – Jun 30, ${start + 1}` };
+}
+
+// What this season's jobs need. Completed jobs count too: their lights are still up on the
+// house until takedown. Mini lights count the actual balls used, else the estimate.
+function inventoryNeeds(jobs, season, settings) {
+  const line = { needed: 0, uses: [] };   // feet of line, every job with roofline
+  const bulbs = {};      // base color -> { needed, uses: [{ job, amount }] }
+  const mini = {};       // lowercased color -> { color, needed, uses }
+  const noColor = { needed: 0, uses: [] };  // feet whose bulb colors aren't picked yet
+  const add = (bucket, job, amount) => {
+    bucket.needed += amount;
+    const same = bucket.uses.find(u => u.job.id === job.id);
+    if (same) same.amount += amount; else bucket.uses.push({ job, amount });
+  };
+  jobs.forEach(job => {
+    const day = scheduledOf(job);
+    if (!day || day < season.start || day > season.end) return;
+    const feet = Number(job.feet) || 0;
+    if (feet > 0) {
+      add(line, job, feet);
+      const pattern = ROOFLINE_PATTERNS[job.rooflineColor];
+      if (!pattern) add(noColor, job, feet);
+      else bulbsByColor(pattern, socketsFor(feet, settings)).forEach(([color, count]) => {
+        if (count) add(bulbs[color] || (bulbs[color] = { needed: 0, uses: [] }), job, count);
+      });
+    }
+    (job.miniLights || []).forEach(r => {
+      const balls = blankNum(r.actual) ? (Number(r.est) || 0) : (Number(r.actual) || 0);
+      if (!balls) return;
+      const color = (r.color || '').trim() || 'No color picked';
+      const key = color.toLowerCase();
+      add(mini[key] || (mini[key] = { color, needed: 0, uses: [] }), job, balls);
+    });
+  });
+  return { line, bulbs, mini, noColor };
+}
+
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
 function jobPayments(job) {
   const revenue = Number(job.revenue) || 0;
@@ -649,6 +742,7 @@ function App() {
   const [techs, setTechs] = useState(initial.techs);
   const [jobs, setJobs] = useState(initial.jobs);
   const [expenses, setExpenses] = useState(initial.expenses);
+  const [inventory, setInventory] = useState(initial.inventory);
   const [settings, setSettings] = useState(initial.settings);
   const [tab, setTab] = useState('jobs');
 
@@ -670,7 +764,7 @@ function App() {
   const firstRun = useRef(true);
   const localUpdatedAt = useRef(Number(lsGet(TS_KEY, 0)) || 0);
   userRef.current = user;
-  dataRef.current = { techs, jobs, expenses, settings };
+  dataRef.current = { techs, jobs, expenses, settings, inventory };
 
   const doCloudSave = (uid, contentJson, ts) => {
     clearTimeout(retryTimer.current);
@@ -703,7 +797,12 @@ function App() {
           jobs: d.jobs || [],
           expenses: d.expenses || [],
           settings: d.settings || {},
+          inventory: d.inventory,
         });
+        // A copy saved by a version from before the Inventory tab has no `inventory` field at
+        // all. Adopting it must not wipe this device's inventory: keep ours, and the save that
+        // follows puts it back in the cloud.
+        const cloudKnowsInventory = Array.isArray(d.inventory);
         const incomingJSON = JSON.stringify(incoming);
         if (incomingJSON === lastCloudJSON.current) return;
 
@@ -728,6 +827,7 @@ function App() {
           setJobs(incoming.jobs);
           setExpenses(incoming.expenses);
           setSettings(incoming.settings);
+          setInventory(cloudKnowsInventory ? incoming.inventory : local.inventory);
         } else if (!isSaving.current) {
           doCloudSave(uid, JSON.stringify(local), Math.max(localTs, cloudTs) + 1);
         }
@@ -756,7 +856,7 @@ function App() {
   // Runs only when the data itself changes (not on sign-in), so a stale device is never
   // mistaken for the newest copy just because someone signed in on it.
   useEffect(() => {
-    const data = { techs, jobs, expenses, settings };
+    const data = { techs, jobs, expenses, settings, inventory };
     saveData(data);
     const json = JSON.stringify(data);
     if (json === lastCloudJSON.current) return;
@@ -769,7 +869,7 @@ function App() {
       return;
     }
     doCloudSave(userRef.current.uid, json, ts);
-  }, [techs, jobs, expenses, settings]);
+  }, [techs, jobs, expenses, settings, inventory]);
 
   const signIn = () => {
     setAuthError('');
@@ -793,11 +893,14 @@ function App() {
       jobs: Array.isArray(raw.jobs) ? raw.jobs : [],
       expenses: Array.isArray(raw.expenses) ? raw.expenses : [],
       settings: raw.settings || {},
+      inventory: raw.inventory,
     });
     setTechs(d.techs);
     setJobs(d.jobs);
     setExpenses(d.expenses);
     setSettings(d.settings);
+    // A backup from before the Inventory tab has no inventory; keep the current one then.
+    if (Array.isArray(raw.inventory)) setInventory(d.inventory);
   };
 
   const upsertTech = (t) => {
@@ -858,6 +961,9 @@ function App() {
             onEdit={(j) => setJobModal(j)}
             onDelete={deleteJob} onSetPayment={setPayment} />
         )}
+        {tab === 'inventory' && (
+          <InventoryTab jobs={jobs} inventory={inventory} setInventory={setInventory} settings={settings} onEditJob={(j) => setJobModal(j)} />
+        )}
         {tab === 'techs' && (
           <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings}
             onAdd={() => setTechModal({})}
@@ -879,6 +985,7 @@ function App() {
             onEditTech={(t) => setTechModal(t)} onDeleteTech={deleteTech}
             jobs={jobs} onEditJob={(j) => setJobModal(j)} onDeleteJob={deleteJob}
             expenses={expenses} onEditExpense={(e) => setExpenseModal(e)} onDeleteExpense={deleteExpense}
+            inventory={inventory}
             user={user} syncState={syncState} authError={authError} signIn={signIn} signOut={signOut} onImport={importData} />
         )}
       </main>
@@ -896,6 +1003,9 @@ function App() {
       <nav className="tab-bar">
         <button className={"tab-btn" + (tab === 'jobs' ? ' active' : '')} onClick={() => setTab('jobs')}>
           <span className="ic">🧾</span>Jobs
+        </button>
+        <button className={"tab-btn" + (tab === 'inventory' ? ' active' : '')} onClick={() => setTab('inventory')}>
+          <span className="ic">📦</span>Inventory
         </button>
         <button className={"tab-btn" + (tab === 'techs' ? ' active' : '')} onClick={() => setTab('techs')}>
           <span className="ic">👷</span>Techs
@@ -916,7 +1026,7 @@ function App() {
           onSave={(t) => { upsertTech(t); setTechModal(null); }} />
       )}
       {jobModal && (
-        <JobModal job={jobModal} techs={techs} settings={settings}
+        <JobModal job={jobModal} techs={techs} settings={settings} inventory={inventory}
           onClose={() => setJobModal(null)}
           onSave={(j) => { upsertJob(j); setJobModal(null); }} />
       )}
@@ -925,6 +1035,208 @@ function App() {
           onSave={(e) => { upsertExpense(e); setExpenseModal(null); }} />
       )}
     </React.Fragment>
+  );
+}
+
+// ================= Inventory =================
+// A text box that only saves when you leave it (or press Enter), so typing doesn't sync
+// every keystroke. onCommit returns false to reject the value and restore the old one.
+function CommitInput({ value, onCommit, ...props }) {
+  const shown = value == null ? '' : String(value);
+  const [text, setText] = useState(shown);
+  useEffect(() => { setText(shown); }, [shown]);
+  const commit = () => { if (text !== shown && onCommit(text) === false) setText(shown); };
+  // Also save if the box disappears while still holding an unsaved edit (e.g. switching tabs).
+  const latest = useRef(null);
+  latest.current = { text, shown, onCommit };
+  useEffect(() => () => {
+    const l = latest.current;
+    if (l.text !== l.shown) l.onCommit(l.text);
+  }, []);
+  return <input {...props} value={text} onChange={e => setText(e.target.value)} onBlur={commit}
+    onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }} />;
+}
+
+const validQty = (text) => text.trim() !== '' && !isNaN(Number(text)) && Number(text) >= 0;
+const fmtQty = (n) => Math.round(n).toLocaleString();
+
+function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
+  const season = currentSeason();
+  const needs = useMemo(() => inventoryNeeds(jobs, season, settings), [jobs, season.start, settings.bulbSpacingIn]);
+  const spacing = spacingOf(settings);
+  const [open, setOpen] = useState(null); // "kind:color" row showing its jobs
+
+  const itemsOf = (kind) => inventory.filter(i => i.kind === kind);
+  const setQty = (kind, name, text) => {
+    if (!validQty(text)) { alert('Enter a number of 0 or more.'); return false; }
+    const qty = Number(text);
+    setInventory(prev => prev.some(i => i.kind === kind && sameName(i.name, name))
+      ? prev.map(i => i.kind === kind && sameName(i.name, name) ? { ...i, qty } : i)
+      : [...prev, { id: uid(), kind, name, qty }]);
+  };
+  const updateItem = (id, patch) => setInventory(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i));
+  const removeItem = (id) => setInventory(prev => prev.filter(i => i.id !== id));
+  const addItem = (kind) => setInventory(prev => [...prev, { id: uid(), kind, name: '', qty: 0 }]);
+
+  // Need rounds up: a job can't use a fraction of a foot of line.
+  const need = (bucket) => bucket ? Math.ceil(bucket.needed - 1e-6) : 0;
+  const lineItem = itemsOf('line')[0];
+  const lineRow = { key: 'line', kind: 'line', name: 'Line', have: lineItem ? Number(lineItem.qty) || 0 : 0, need: need(needs.line), uses: needs.line.uses };
+  const bulbRows = ROOFLINE_BASE_COLORS.map(color => {
+    const item = itemsOf('bulb').find(i => sameName(i.name, color));
+    const bucket = needs.bulbs[color];
+    return { key: 'bulb:' + color, kind: 'bulb', name: color, have: item ? Number(item.qty) || 0 : 0, need: need(bucket), uses: bucket ? bucket.uses : [] };
+  });
+  const miniItems = itemsOf('mini');
+  const miniRows = [
+    ...miniItems.map(item => {
+      const bucket = item.name.trim() ? needs.mini[item.name.trim().toLowerCase()] : null;
+      return { key: 'mini:' + item.id, kind: 'mini', item, name: item.name, have: Number(item.qty) || 0, need: need(bucket), uses: bucket ? bucket.uses : [] };
+    }),
+    // Colors on jobs that aren't in the inventory yet.
+    ...Object.values(needs.mini)
+      .filter(b => !miniItems.some(i => sameName(i.name, b.color)))
+      .sort((a, b) => a.color.localeCompare(b.color))
+      .map(b => ({ key: 'mini:job:' + b.color.toLowerCase(), kind: 'mini', item: null, name: b.color, have: 0, need: need(b), uses: b.uses })),
+  ];
+  const shortages = [
+    ...(lineRow.need > lineRow.have ? [{ name: `${spacing}″ line`, amount: lineRow.need - lineRow.have, unit: 'ft', what: 'roofline' }] : []),
+    ...bulbRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'bulbs', what: 'roofline bulbs' })),
+    ...miniRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'balls', what: 'mini lights' })),
+  ];
+
+  const usesList = (row, unit) => open === row.key && (
+    <div className="inv-uses">
+      {row.uses.length === 0 ? <div>No jobs this season use this.</div> : row.uses.map(({ job, amount }) => (
+        <div key={job.id} className="inv-use" onClick={() => onEditJob(job)}>
+          <span><b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))} · {job.status}</span>
+          <span>{fmtQty(amount)} {unit}</span>
+        </div>
+      ))}
+    </div>
+  );
+  const leftCell = (row) => {
+    const left = row.have - row.need;
+    return <span className={'inv-left ' + (left < 0 ? 'short' : 'ok')}>{left < 0 ? `${fmtQty(-left)} short` : fmtQty(left)}</span>;
+  };
+
+  return (
+    <div>
+      <div className="card" style={shortages.length ? { borderColor: 'var(--loss)' } : {}}>
+        <div className="section-title">{shortages.length ? 'Need to Order' : 'Stock Check'}</div>
+        {shortages.length === 0 ? (
+          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough roofline and mini lights for every job booked this season.</div>
+        ) : shortages.map(s => (
+          <div className="payout-row" key={s.what + s.name}>
+            <span><b>{s.name}</b> <span className="tech-meta">{s.what}</span></span>
+            <span style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtQty(s.amount)} {s.unit}</span>
+          </div>
+        ))}
+        <div className="hint">Counting jobs scheduled {season.label}, completed ones included, since their lights are still up until takedown.</div>
+      </div>
+
+      {needs.noColor.needed > 0 && (
+        <div className="card" style={{ borderColor: 'var(--gold)' }}>
+          <div className="hint" style={{ marginTop: 0, color: 'var(--text)' }}>
+            ⚠ <b>{fmtQty(needs.noColor.needed)} ft</b> of roofline is on jobs with no color picked. The line is counted, but its bulbs aren’t counted against any color yet. Tap a job to pick one:
+          </div>
+          {needs.noColor.uses.map(({ job, amount }) => (
+            <div key={job.id} className="inv-use" onClick={() => onEditJob(job)}>
+              <span><b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))}</span><span>{fmtQty(amount)} ft</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      <div className="card">
+        <div className="section-title">Roofline Line (feet)</div>
+        <div className="inv-grid inv-head"><span></span><span>Have</span><span>On jobs</span><span>Left</span></div>
+        <div className="inv-grid">
+          <span className="inv-name" onClick={() => setOpen(open === 'line' ? null : 'line')}>{spacing}″ spaced line <span className="tech-meta">{open === 'line' ? '▾' : '▸'}</span></span>
+          <CommitInput type="number" inputMode="numeric" min="0" step="1" value={lineRow.have} aria-label="Feet of line on hand"
+            onCommit={text => setQty('line', 'Line', text)} />
+          <span className="inv-num">{fmtQty(lineRow.need)}</span>
+          {leftCell(lineRow)}
+        </div>
+        {usesList(lineRow, 'ft')}
+      </div>
+
+      <div className="card">
+        <div className="section-title">Roofline Bulbs</div>
+        <div className="inv-grid inv-head"><span>Color</span><span>Have</span><span>On jobs</span><span>Left</span></div>
+        {bulbRows.map(row => (
+          <React.Fragment key={row.key}>
+            <div className="inv-grid">
+              <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.name} <span className="tech-meta">{open === row.key ? '▾' : '▸'}</span></span>
+              <CommitInput type="number" inputMode="numeric" min="0" step="1" value={row.have} aria-label={`${row.name} bulbs on hand`}
+                onCommit={text => setQty('bulb', row.name, text)} />
+              <span className="inv-num">{fmtQty(row.need)}</span>
+              {leftCell(row)}
+            </div>
+            {usesList(row, 'bulbs')}
+          </React.Fragment>
+        ))}
+        <div className="hint">
+          Your line has a bulb every {spacing}″, so each foot takes {pct2(12 / spacing)} bulbs ({fmtQty(socketsFor(100, settings))} bulbs per 100 ft).
+          Candy Cane alternates Red and Pure White; Classic Christmas repeats Red, Green, Pure White. Tap a color to see the jobs using it.
+        </div>
+      </div>
+
+      <div className="card">
+        <div className="section-title">Mini Lights (balls)</div>
+        {miniRows.length === 0 ? (
+          <div className="hint" style={{ marginTop: 0 }}>No mini lights yet. Add the colors you have in stock.</div>
+        ) : (
+          <div className="inv-grid inv-head"><span>Color</span><span>Have</span><span>On jobs</span><span>Left</span></div>
+        )}
+        {miniRows.map(row => (
+          <React.Fragment key={row.key}>
+            <div className="inv-grid">
+              {row.item ? (
+                <span className="inv-name-edit">
+                  <CommitInput type="text" list="inv-mini-colors" value={row.item.name} placeholder="Color" aria-label="Mini light color"
+                    onCommit={text => {
+                      if (miniItems.some(i => i.id !== row.item.id && sameName(i.name, text))) { alert('That color is already in your inventory.'); return false; }
+                      updateItem(row.item.id, { name: text.trim() });
+                    }} />
+                  <button className="icon-btn" onClick={() => setOpen(open === row.key ? null : row.key)} aria-label="Show jobs">{open === row.key ? '▾' : '▸'}</button>
+                </span>
+              ) : (
+                <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.name} <span className="tech-meta">{open === row.key ? '▾' : '▸'} on jobs, not in stock</span></span>
+              )}
+              <CommitInput type="number" inputMode="numeric" min="0" step="1" value={row.have} aria-label={`${row.name || 'Mini light'} balls on hand`}
+                onCommit={text => row.item ? (validQty(text) ? updateItem(row.item.id, { qty: Number(text) }) : (alert('Enter a number of 0 or more.'), false)) : setQty('mini', row.name, text)} />
+              <span className="inv-num">{fmtQty(row.need)}</span>
+              {leftCell(row)}
+            </div>
+            {usesList(row, 'balls')}
+            {row.item && open === row.key && (
+              <button className="btn btn-ghost btn-sm" style={{ color: 'var(--loss)', marginBottom: 8 }}
+                onClick={() => { if (confirm(`Remove ${row.name || 'this color'} from inventory?`)) removeItem(row.item.id); }}>Remove from inventory</button>
+            )}
+          </React.Fragment>
+        ))}
+        <datalist id="inv-mini-colors">{MINI_LIGHT_COLORS.map(c => <option key={c} value={c} />)}</datalist>
+        <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => addItem('mini')}>+ Add color</button>
+        <div className="hint">Matched to jobs by color name. Jobs count the actual balls used once entered, otherwise the estimate.</div>
+      </div>
+
+      <div className="card">
+        <div className="section-title">Other Supplies</div>
+        {itemsOf('other').length === 0 && <div className="hint" style={{ marginTop: 0 }}>Clips, timers, extension cords, stakes… whatever else you keep on hand.</div>}
+        {itemsOf('other').length > 0 && <div className="other-grid inv-head"><span>Item</span><span>Qty</span><span>Note</span><span></span></div>}
+        {itemsOf('other').map(item => (
+          <div className="other-grid" key={item.id}>
+            <CommitInput type="text" value={item.name} placeholder="Item" aria-label="Supply name" onCommit={text => updateItem(item.id, { name: text.trim() })} />
+            <CommitInput type="number" inputMode="numeric" min="0" step="1" value={item.qty} aria-label="Quantity"
+              onCommit={text => validQty(text) ? updateItem(item.id, { qty: Number(text) }) : (alert('Enter a number of 0 or more.'), false)} />
+            <CommitInput type="text" value={item.note || ''} placeholder="e.g. boxes of 100" aria-label="Note" onCommit={text => updateItem(item.id, { note: text.trim() })} />
+            <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${item.name || 'this item'}?`)) removeItem(item.id); }} aria-label="Remove item">✕</button>
+          </div>
+        ))}
+        <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => addItem('other')}>+ Add item</button>
+      </div>
+    </div>
   );
 }
 
@@ -1152,7 +1464,7 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
               <div>
                 <div className="job-customer">{job.customer || 'Untitled Job'}</div>
                 <div className="job-sub">
-                  📅 {fmtDateOnly(scheduledOf(job)) || 'No date'} · {(Number(job.feet) || 0).toLocaleString()} ft
+                  📅 {fmtDateOnly(scheduledOf(job)) || 'No date'} · {(Number(job.feet) || 0).toLocaleString()} ft{job.rooflineColor ? ` ${job.rooflineColor}` : ''}
                   {calc.mini.charged > 0 && ` · ${calc.mini.charged} mini ball${calc.mini.charged === 1 ? '' : 's'}${calc.mini.usingEstimate ? ' (est.)' : ''}`}
                   {mockupIdsOf(job).length > 0 && ` · 🖼️ ${mockupIdsOf(job).length} picture${mockupIdsOf(job).length === 1 ? '' : 's'}`}
                 </div>
@@ -1200,10 +1512,16 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
   );
 }
 
-function JobModal({ job, techs, settings, onClose, onSave }) {
+function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
   const isNew = !job.id;
   const [customer, setCustomer] = useState(job.customer || '');
   const [feet, setFeet] = useState(job.feet != null ? String(job.feet) : '');
+  const [rooflineColor, setRooflineColor] = useState(job.rooflineColor || '');
+  // Mini light color suggestions: what's in inventory first, then the usual colors.
+  const miniColorOptions = [
+    ...(inventory || []).filter(i => i.kind === 'mini' && i.name.trim()).map(i => i.name.trim()),
+    ...MINI_LIGHT_COLORS,
+  ].filter((c, i, all) => all.findIndex(o => sameName(o, c)) === i);
   const [revenue, setRevenue] = useState(job.revenue != null ? String(job.revenue) : '');
   const [status, setStatus] = useState(job.status || 'Scheduled');
   const [miscCost, setMiscCost] = useState(job.miscCost != null ? String(job.miscCost) : '');
@@ -1355,6 +1673,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
         })),
       ...(mockupIds.length ? { mockupIds } : {}),
       feet: Number(feet),
+      ...(rooflineColor ? { rooflineColor } : {}),
       revenue: Number(revenue),
       status,
       scheduledDate,
@@ -1393,6 +1712,29 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
           </div>
         </div>
 
+        <label>Roofline Color</label>
+        <div className="color-grid">
+          {Object.keys(ROOFLINE_PATTERNS).map(name => (
+            <div key={name} className={'pill color-pill' + (rooflineColor === name ? ' active' : '')}
+              onClick={() => setRooflineColor(rooflineColor === name ? '' : name)}>
+              <div>{name}</div>
+              <div className="color-sub">{ROOFLINE_PATTERN_HINTS[name]}</div>
+            </div>
+          ))}
+        </div>
+        {Number(feet) > 0 && (() => {
+          const sockets = socketsFor(Number(feet), settings);
+          const intro = `${Number(feet).toLocaleString()} ft of ${spacingOf(settings)}″ line = ${sockets.toLocaleString()} bulbs`;
+          if (!ROOFLINE_PATTERNS[rooflineColor]) return <div className="hint">{intro}. Pick a color so the bulbs count against your inventory.</div>;
+          const split = bulbsByColor(ROOFLINE_PATTERNS[rooflineColor], sockets);
+          return (
+            <div className="hint">
+              {intro}{split.length > 1 ? ': ' : ' '}
+              <b>{split.map(([color, count]) => `${count.toLocaleString()} ${color}`).join(' · ')}</b>
+            </div>
+          );
+        })()}
+
         <label style={{ marginTop: 16 }}>Mini Lights</label>
         <div className="card" style={{ margin: 0, padding: 10 }}>
           {miniLights.length === 0 ? (
@@ -1411,7 +1753,7 @@ function JobModal({ job, techs, settings, onClose, onSave }) {
               <button className="icon-btn danger" onClick={() => removeMini(r.id)} aria-label="Remove this color">✕</button>
             </div>
           ))}
-          <datalist id="mini-light-colors">{MINI_LIGHT_COLORS.map(c => <option key={c} value={c} />)}</datalist>
+          <datalist id="mini-light-colors">{miniColorOptions.map(c => <option key={c} value={c} />)}</datalist>
           <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={addMiniRow}>+ Add color</button>
         </div>
         {miniLights.length > 0 && (
@@ -1844,7 +2186,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 }
 
 // ================= Settings =================
-function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, user, syncState, authError, signIn, signOut, onImport }) {
+function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, user, syncState, authError, signIn, signOut, onImport }) {
   const [commStr, setCommStr] = useState(String(settings.commissionPct));
   const [feeStr, setFeeStr] = useState(String(settings.cardFeePct));
   const saveCardFee = () => {
@@ -1857,6 +2199,12 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
     const v = Number(miniStr);
     if (miniStr === '' || isNaN(v) || v < 0) { alert('Enter a valid cost per ball of mini lights.'); setMiniStr(String(settings.miniLightCostPerBall)); return; }
     setSettings(s => ({ ...s, miniLightCostPerBall: v }));
+  };
+  const [spacingStr, setSpacingStr] = useState(String(spacingOf(settings)));
+  const saveSpacing = () => {
+    const v = Number(spacingStr);
+    if (spacingStr === '' || isNaN(v) || v <= 0) { alert('Enter the bulb spacing in inches (more than 0).'); setSpacingStr(String(spacingOf(settings))); return; }
+    setSettings(s => ({ ...s, bulbSpacingIn: v }));
   };
   const [lightStr, setLightStr] = useState(String(settings.lightCostPerFt));
   const saveLightCost = () => {
@@ -1874,7 +2222,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
 
   const [importMsg, setImportMsg] = useState('');
   const exportBackup = () => {
-    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings };
+    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings, inventory };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -1893,7 +2241,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
       let d;
       try { d = JSON.parse(ev.target.result); } catch (err) { setImportMsg('That file is not a valid backup.'); return; }
       if (!d || !Array.isArray(d.jobs) || !Array.isArray(d.techs)) { setImportMsg('That file does not look like a Christmas Lights backup.'); return; }
-      const counts = `${d.techs.length} techs, ${d.jobs.length} jobs, ${(d.expenses || []).length} expenses`;
+      const counts = `${d.techs.length} techs, ${d.jobs.length} jobs, ${(d.expenses || []).length} expenses${Array.isArray(d.inventory) ? `, ${d.inventory.length} inventory items` : ''}`;
       if (!confirm(`Import this backup (${counts})?\n\nIt REPLACES all current data here, and on your other devices once synced.`)) return;
       onImport(d);
       setImportMsg(`Imported ${counts}.`);
@@ -1939,6 +2287,17 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
           </div>
         )}
         {authError && <div className="msg-err">{authError}</div>}
+      </div>
+
+      <div className="card">
+        <div className="section-title">Roofline Line</div>
+        <label>Bulb Spacing on Your Line (inches)</label>
+        <div className="field-group">
+          <input type="number" inputMode="decimal" min="1" step="1" value={spacingStr}
+            onChange={e => setSpacingStr(e.target.value)} onBlur={saveSpacing} />
+          <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveSpacing}>Save</button>
+        </div>
+        <div className="hint">Used to work out how many bulbs each job needs from its feet: at {spacingOf(settings)}″, 100 ft of line takes {socketsFor(100, settings)} bulbs.</div>
       </div>
 
       <div className="card">
@@ -2051,7 +2410,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
           <div className="tech-row" key={b.day}>
             <div>
               <div className="tech-name">{fmtDate(b.ts)}</div>
-              <div className="tech-meta">{(b.data.techs || []).length} techs · {(b.data.jobs || []).length} jobs · {(b.data.expenses || []).length} expenses</div>
+              <div className="tech-meta">{(b.data.techs || []).length} techs · {(b.data.jobs || []).length} jobs · {(b.data.expenses || []).length} expenses{Array.isArray(b.data.inventory) ? ` · ${b.data.inventory.length} inventory items` : ''}</div>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={() => { if (confirm('Restore this backup? It REPLACES all current data on every synced device.')) onImport(b.data); }}>Restore</button>
           </div>
