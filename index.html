@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-<meta name="theme-color" content="#0d3b24" />
+<meta name="theme-color" content="#0f3d2a" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 <meta name="apple-mobile-web-app-title" content="Lights Tracker" />
@@ -31,271 +31,554 @@
 <script src="https://unpkg.com/@babel/standalone@7.23.10/babel.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Oswald:wght@600;700&display=swap" rel="stylesheet" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<script>
+  // Apply a saved light/dark choice before anything paints, so there's no flash.
+  try { var t = localStorage.getItem('xmasTheme'); if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t); } catch (e) {}
+</script>
 <style>
+  /* ============ Design tokens ============ */
   :root {
-    --pine:    #0d3b24;
-    --pine2:   #124f30;
-    --pine3:   #196b40;
-    --red:     #b0242a;
-    --red2:    #d13138;
-    --gold:    #d4a017;
-    --gold2:   #f0bc2a;
-    --white:   #ffffff;
-    --bg:      #f2f4f0;
-    --surface: #ffffff;
-    --border:  #d7dcd3;
-    --muted:   #52604f;
-    --text:    #142016;
-    --profit:  #136130;
-    --loss:    #a81515;
+    --font: 'Plus Jakarta Sans', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --pine: #0f3d2a; --pine2: #145236; --pine3: #1d6b47;
+    --red: #c0352f; --red2: #d9443d;
+    --gold: #c8962b; --gold2: #e9b949;
+    --white: #ffffff;
+    --bg: #f3f1ea; --surface: #ffffff; --surface-2: #f7f5ef;
+    --border: #e7e2d6; --border-strong: #d4ccba;
+    --text: #15201a; --muted: #67715f; --faint: #9a9f93;
+    --primary: #0f3d2a; --primary-ink: #ffffff;
+    --profit: #16784a; --loss: #c0392b;
+    --profit-soft: #e5f3ea; --loss-soft: #fbe9e6; --warn: #8f6400; --warn-soft: #fbf1da;
+    --input-bg: #ffffff; --focus: rgba(29,107,71,.22);
+    --header-bg: radial-gradient(120% 140% at 0% 0%, #17573a 0%, #0f3d2a 45%, #0a2e1f 100%);
+    --nav-bg: rgba(255,255,255,.82); --nav-ink: #737d70; --nav-active: #0f3d2a; --nav-pill: #e4eee6;
+    --summary-bg: linear-gradient(155deg, #0f3d2a 0%, #16573b 100%); --summary-ink: #ffffff; --summary-sub: rgba(255,255,255,.72);
+    --good-on-dark: #8ee6b2; --bad-on-dark: #ffaaa0;
+    --shadow-sm: 0 1px 2px rgba(22,32,24,.05), 0 1px 3px rgba(22,32,24,.05);
+    --shadow-md: 0 10px 28px -12px rgba(22,32,24,.22), 0 2px 6px rgba(22,32,24,.05);
+    --shadow-lg: 0 28px 70px -24px rgba(8,24,15,.5);
+    --radius: 18px; --radius-sm: 12px;
+    --ease: cubic-bezier(.22,.9,.32,1);
+    color-scheme: light;
   }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme=light]) {
+      --pine: #2f9e67; --pine2: #278a59; --pine3: #4dc189;
+      --red: #e2554d; --red2: #ef6a62; --gold: #e2b04a; --gold2: #f3c766;
+      --bg: #0a120e; --surface: #111b16; --surface-2: #16231c;
+      --border: #213129; --border-strong: #2e4337;
+      --text: #ebf2ec; --muted: #95a59a; --faint: #6b7c71;
+      --primary: #22814f; --primary-ink: #ffffff;
+      --profit: #52d391; --loss: #ff7c6f;
+      --profit-soft: rgba(82,211,145,.12); --loss-soft: rgba(255,124,111,.12); --warn: #f1c35e; --warn-soft: rgba(241,195,94,.12);
+      --input-bg: #0d1712; --focus: rgba(77,193,137,.25);
+      --header-bg: radial-gradient(120% 140% at 0% 0%, #123a27 0%, #0b2418 50%, #07150e 100%);
+      --nav-bg: rgba(15,24,19,.8); --nav-ink: #8b9b91; --nav-active: #f3c766; --nav-pill: rgba(243,199,102,.12);
+      --summary-bg: linear-gradient(155deg, #133a28 0%, #0d281c 100%);
+      --shadow-sm: 0 1px 2px rgba(0,0,0,.35); --shadow-md: 0 12px 30px -14px rgba(0,0,0,.7); --shadow-lg: 0 30px 80px -20px rgba(0,0,0,.8);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme=dark] {
+    --pine: #2f9e67; --pine2: #278a59; --pine3: #4dc189;
+    --red: #e2554d; --red2: #ef6a62; --gold: #e2b04a; --gold2: #f3c766;
+    --bg: #0a120e; --surface: #111b16; --surface-2: #16231c;
+    --border: #213129; --border-strong: #2e4337;
+    --text: #ebf2ec; --muted: #95a59a; --faint: #6b7c71;
+    --primary: #22814f; --primary-ink: #ffffff;
+    --profit: #52d391; --loss: #ff7c6f;
+    --profit-soft: rgba(82,211,145,.12); --loss-soft: rgba(255,124,111,.12); --warn: #f1c35e; --warn-soft: rgba(241,195,94,.12);
+    --input-bg: #0d1712; --focus: rgba(77,193,137,.25);
+    --header-bg: radial-gradient(120% 140% at 0% 0%, #123a27 0%, #0b2418 50%, #07150e 100%);
+    --nav-bg: rgba(15,24,19,.8); --nav-ink: #8b9b91; --nav-active: #f3c766; --nav-pill: rgba(243,199,102,.12);
+    --summary-bg: linear-gradient(155deg, #133a28 0%, #0d281c 100%);
+    --shadow-sm: 0 1px 2px rgba(0,0,0,.35); --shadow-md: 0 12px 30px -14px rgba(0,0,0,.7); --shadow-lg: 0 30px 80px -20px rgba(0,0,0,.8);
+    color-scheme: dark;
+  }
+
+  /* ============ Base ============ */
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { -webkit-text-size-adjust: 100%; }
-  body { font-family: 'Inter', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  body {
+    font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh;
+    -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+    -webkit-tap-highlight-color: transparent; transition: background .3s ease;
+  }
   input, select, textarea, button { font-family: inherit; }
-  #root { max-width: 560px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; padding-bottom: 78px; }
+  button { -webkit-tap-highlight-color: transparent; }
+  #root { min-height: 100vh; display: flex; flex-direction: column; padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+  .desktop-only { display: none !important; }
+  svg.ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: 0 0 auto; }
 
-  /* Header */
+  /* ============ Loading splash (shown until the app starts) ============ */
+  .splash { position: fixed; inset: 0; display: grid; place-items: center; background: var(--header-bg); color: #fff; z-index: 100; }
+  .splash-inner { text-align: center; }
+  .splash-tree { font-size: 54px; filter: drop-shadow(0 0 22px rgba(255,214,120,.45)); animation: splashPulse 1.6s ease-in-out infinite; }
+  .splash-title { margin-top: 12px; font: 800 20px/1.2 var(--font); letter-spacing: -.01em; }
+  .splash-sub { margin-top: 4px; font: 600 12.5px var(--font); color: rgba(255,255,255,.6); letter-spacing: .04em; }
+  .splash .string-lights { position: relative; bottom: auto; margin: 22px auto 0; width: 220px; }
+  @keyframes splashPulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
+  /* ============ Header + string lights ============ */
   .app-header {
-    background: var(--pine);
-    color: var(--white);
-    position: sticky; top: 0; z-index: 20;
-    border-bottom: 3px solid var(--gold);
-    box-shadow: 0 2px 12px rgba(0,0,0,.25);
+    position: sticky; top: 0; z-index: 40; color: #fff; background: var(--header-bg);
+    padding-top: env(safe-area-inset-top); box-shadow: 0 10px 30px -18px rgba(0,0,0,.6);
   }
-  .header-inner { display: flex; align-items: center; gap: 10px; padding: 14px 16px; }
-  .header-inner h1 { font-family: 'Oswald', sans-serif; font-size: 18px; letter-spacing: .3px; flex: 1; }
-  .header-inner .emoji { font-size: 22px; }
+  .header-inner { display: flex; align-items: center; gap: 12px; padding: 12px 16px 20px; max-width: 1180px; margin: 0 auto; }
+  .brand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  .brand-mark {
+    width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; font-size: 19px;
+    background: linear-gradient(145deg, rgba(255,255,255,.16), rgba(255,255,255,.04));
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 6px 16px -6px rgba(0,0,0,.5);
+  }
+  .brand-text { font-weight: 800; font-size: 16.5px; letter-spacing: -.01em; line-height: 1.15; }
+  .brand-text small { display: block; font-size: 11px; font-weight: 600; color: rgba(255,255,255,.62); letter-spacing: .05em; text-transform: uppercase; }
+  .header-title { flex: 1; min-width: 0; }
   .sync-pill {
-    border: 1px solid rgba(255,255,255,.35); background: rgba(255,255,255,.1); color: var(--white);
-    border-radius: 999px; padding: 5px 10px; font-size: 11.5px; font-weight: 700; cursor: pointer; white-space: nowrap;
+    display: inline-flex; align-items: center; gap: 6px;
+    border: 1px solid rgba(255,255,255,.22); background: rgba(255,255,255,.1); color: #fff;
+    border-radius: 999px; padding: 7px 12px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap;
+    backdrop-filter: blur(6px); transition: background .2s, transform .15s, border-color .2s;
   }
-  .sync-pill.ok { border-color: #8fe3ab; color: #8fe3ab; }
-  .sync-pill.err { border-color: #ff9d9d; color: #ff9d9d; }
-  .btn-google {
-    display: flex; align-items: center; gap: 10px; background: var(--white); color: #3c4043;
-    border: 1.5px solid var(--border); border-radius: 10px; padding: 11px 16px; font-weight: 700; font-size: 14.5px; cursor: pointer;
-  }
-  .msg-err { color: var(--loss); font-size: 12.5px; margin-top: 8px; }
+  .sync-pill:hover { background: rgba(255,255,255,.16); }
+  .sync-pill:active { transform: scale(.96); }
+  .sync-pill.ok { border-color: rgba(142,230,178,.55); color: var(--good-on-dark); }
+  .sync-pill.err { border-color: rgba(255,170,160,.6); color: var(--bad-on-dark); }
 
-  /* Bottom nav */
+  .string-lights {
+    position: absolute; left: 0; right: 0; bottom: -6px; height: 18px; overflow: hidden; pointer-events: none;
+    display: flex; justify-content: center; gap: 26px;
+  }
+  .string-lights::before {
+    content: ''; position: absolute; left: -10px; right: -10px; top: 2px; height: 10px;
+    border-bottom: 1.5px solid rgba(0,0,0,.45); border-radius: 0 0 50% 50% / 0 0 100% 100%;
+  }
+  .string-lights span {
+    position: relative; flex: 0 0 auto; width: 7px; height: 11px; margin-top: 5px; border-radius: 50% 50% 45% 45% / 60% 60% 40% 40%;
+    background: var(--c); box-shadow: 0 0 8px 2px var(--c), 0 0 18px 4px color-mix(in srgb, var(--c) 45%, transparent);
+    animation: twinkle 3.2s ease-in-out infinite; animation-delay: calc(var(--i) * -0.37s);
+  }
+  .string-lights span::before { content: ''; position: absolute; left: 1px; right: 1px; top: -3px; height: 4px; border-radius: 1px; background: #1c2a22; }
+  .string-lights span:nth-child(5n+1) { --c: #ffd98a; }
+  .string-lights span:nth-child(5n+2) { --c: #ff5252; }
+  .string-lights span:nth-child(5n+3) { --c: #45e08f; }
+  .string-lights span:nth-child(5n+4) { --c: #ffb703; }
+  .string-lights span:nth-child(5n+5) { --c: #5cb3ff; }
+  .string-lights span:nth-child(3n) { animation-duration: 4.1s; }
+  .string-lights span:nth-child(4n) { animation-duration: 2.6s; }
+  @keyframes twinkle { 0%, 100% { opacity: 1; } 45% { opacity: .45; } 55% { opacity: .5; } }
+
+  /* ============ Navigation ============ */
   .tab-bar {
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 30;
-    max-width: 560px; margin: 0 auto;
-    display: flex; background: var(--pine);
-    border-top: 3px solid var(--gold);
-    box-shadow: 0 -2px 12px rgba(0,0,0,.25);
+    position: fixed; left: 10px; right: 10px; bottom: calc(10px + env(safe-area-inset-bottom)); z-index: 45;
+    max-width: 600px; margin: 0 auto; display: flex; gap: 2px; padding: 6px;
+    background: var(--nav-bg); border: 1px solid var(--border); border-radius: 24px;
+    backdrop-filter: saturate(1.7) blur(20px); -webkit-backdrop-filter: saturate(1.7) blur(20px);
+    box-shadow: 0 18px 40px -18px rgba(8,24,15,.45), 0 2px 8px rgba(8,24,15,.08);
+  }
+  .tab-list { position: relative; flex: 1; display: flex; gap: 2px; min-width: 0; }
+  .tab-indicator {
+    position: absolute; top: 0; bottom: 0; left: 0; width: calc((100% - 10px) / 6);
+    border-radius: 18px; background: var(--nav-pill);
+    transform: translateX(calc(var(--idx) * (100% + 2px))); transition: transform .42s var(--ease);
   }
   .tab-btn {
-    flex: 1; background: none; border: none; color: rgba(255,255,255,.65);
-    padding: 9px 2px 10px; display: flex; flex-direction: column; align-items: center; gap: 3px;
-    font-size: 10.5px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    position: relative; z-index: 1; flex: 1; min-width: 0; border: 0; background: transparent; color: var(--nav-ink);
+    padding: 7px 0 6px; border-radius: 18px; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: -.01em; cursor: pointer; white-space: nowrap;
+    transition: color .25s ease, transform .15s ease;
   }
-  .tab-btn .ic { font-size: 18px; }
-  .tab-btn.active { color: var(--gold2); }
+  .tab-btn:active { transform: scale(.92); }
+  .tab-btn.active { color: var(--nav-active); }
+  .tab-btn .ic { width: 23px; height: 23px; transition: transform .3s var(--ease); }
+  .tab-btn.active .ic { transform: translateY(-1px) scale(1.06); stroke-width: 2.1; }
+  .nav-brand, .nav-foot { display: none; }
 
-  main { flex: 1; padding: 14px 14px 6px; }
+  /* ============ Page layout ============ */
+  main { flex: 1; width: 100%; max-width: 640px; margin: 0 auto; padding: 18px 14px 8px; }
+  .page-head { padding: 2px 4px 14px; }
+  .page-title { font-size: 28px; font-weight: 800; letter-spacing: -.025em; line-height: 1.1; }
+  .page-sub { margin-top: 4px; font-size: 13.5px; font-weight: 600; color: var(--muted); }
+  .header-title .page-title { color: #fff; font-size: 24px; }
+  .header-title .page-sub { color: rgba(255,255,255,.65); }
+  .page-enter { animation: pageIn .38s var(--ease) both; }
+  @keyframes pageIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
 
-  /* Generic */
+  /* ============ Generic building blocks ============ */
   .card {
-    background: var(--surface); border: 1px solid var(--border); border-radius: 14px;
-    padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.05);
+    background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 16px; margin-bottom: 12px; box-shadow: var(--shadow-sm);
   }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .section-title {
-    font-family: 'Oswald', sans-serif; font-size: 14px; text-transform: uppercase;
-    letter-spacing: .5px; color: var(--pine); margin-bottom: 10px;
-  }
+  .section-title { font-size: 12px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); margin-bottom: 12px; }
   .btn {
-    border: none; border-radius: 10px; padding: 11px 16px; font-weight: 700; font-size: 14.5px;
-    cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    border: none; border-radius: 13px; padding: 12px 18px; font-weight: 700; font-size: 14.5px; letter-spacing: -.005em;
+    cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+    transition: transform .15s ease, background .2s ease, box-shadow .2s ease, filter .2s;
   }
-  .btn-primary { background: var(--pine); color: var(--white); }
-  .btn-primary:active { background: var(--pine2); }
-  .btn-gold { background: var(--gold); color: var(--pine); }
-  .btn-red { background: var(--red); color: var(--white); }
-  .btn-ghost { background: var(--bg); color: var(--text); border: 1px solid var(--border); }
+  .btn:active { transform: scale(.97); }
+  .btn-primary { background: var(--primary); color: var(--primary-ink); box-shadow: 0 8px 18px -10px rgba(15,61,42,.8); }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-gold { background: var(--gold); color: #1d1405; }
+  .btn-red { background: var(--red); color: #fff; }
+  .btn-ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--border-strong); }
   .btn-block { width: 100%; }
-  .btn-sm { padding: 7px 11px; font-size: 13px; border-radius: 8px; }
-  .btn-icon { padding: 8px 10px; border-radius: 8px; }
-  .fab {
-    position: fixed; right: 18px; bottom: 92px; z-index: 25;
-    width: 54px; height: 54px; border-radius: 50%; background: var(--red);
-    color: var(--white); font-size: 26px; border: none; box-shadow: 0 4px 14px rgba(0,0,0,.35);
-    display: flex; align-items: center; justify-content: center; cursor: pointer;
-  }
-  .fab-wrap { max-width: 560px; margin: 0 auto; position: relative; }
+  .btn-sm { padding: 8px 13px; font-size: 13px; border-radius: 11px; }
+  .btn-icon { padding: 8px 10px; border-radius: 10px; }
+  label.btn { margin: 0; color: var(--text); }
 
-  label { display: block; font-size: 12.5px; font-weight: 600; color: var(--muted); margin: 12px 0 5px; }
-  label:first-child { margin-top: 0; }
-  input[type=text], input[type=number], select, textarea {
-    width: 100%; padding: 11px 12px; border: 1.5px solid var(--border); border-radius: 9px;
-    font-size: 16px; background: var(--white); color: var(--text);
+  .fab-wrap { position: relative; }
+  .fab {
+    position: fixed; right: 16px; bottom: calc(92px + env(safe-area-inset-bottom)); z-index: 44;
+    height: 54px; padding: 0 20px 0 16px; border-radius: 18px; border: none; cursor: pointer;
+    display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 800; letter-spacing: -.01em;
+    color: #fff; background: linear-gradient(140deg, #d8443c, #b62b25);
+    box-shadow: 0 16px 30px -12px rgba(182,43,37,.75), inset 0 1px 0 rgba(255,255,255,.25);
+    transition: transform .18s var(--ease), box-shadow .2s; animation: fabIn .45s var(--ease) both;
   }
-  input:focus, select:focus, textarea:focus { outline: 2px solid var(--pine3); outline-offset: 1px; }
+  .fab:hover { transform: translateY(-2px); }
+  .fab:active { transform: scale(.95); }
+  .fab .ic { width: 22px; height: 22px; stroke-width: 2.4; }
+  @keyframes fabIn { from { opacity: 0; transform: translateY(16px) scale(.9); } to { opacity: 1; transform: none; } }
+
+  label { display: block; font-size: 12.5px; font-weight: 700; color: var(--muted); margin: 14px 0 6px; letter-spacing: .01em; }
+  label:first-child { margin-top: 0; }
+  input[type=text], input[type=number], input[type=date], input[type=search], select, textarea {
+    width: 100%; padding: 12px 13px; border: 1.5px solid var(--border); border-radius: 13px;
+    font-size: 16px; background: var(--input-bg); color: var(--text);
+    transition: border-color .2s ease, box-shadow .2s ease, background .2s;
+    -webkit-appearance: none; appearance: none;
+  }
+  input[type=date] { min-height: 48px; }
+  select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%238a9389' stroke-width='1.8' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat; background-position: right 13px center; padding-right: 36px;
+  }
+  input::placeholder { color: var(--faint); }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: var(--pine3); box-shadow: 0 0 0 4px var(--focus); }
+  input[type=checkbox] { -webkit-appearance: auto; appearance: auto; }
   .field-group { display: flex; gap: 10px; }
-  .field-group > div { flex: 1; }
-  .hint { font-size: 11.5px; color: var(--muted); margin-top: 4px; }
+  .field-group > div { flex: 1; min-width: 0; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 6px; line-height: 1.45; }
+  .hint b { color: var(--text); }
 
   .pill-group { display: flex; gap: 8px; }
   .pill {
-    flex: 1; text-align: center; padding: 9px 6px; border-radius: 9px; border: 1.5px solid var(--border);
-    background: var(--white); font-weight: 600; font-size: 13.5px; cursor: pointer; color: var(--muted);
+    flex: 1; text-align: center; padding: 11px 8px; border-radius: 13px; border: 1.5px solid var(--border);
+    background: var(--input-bg); font-weight: 700; font-size: 13.5px; cursor: pointer; color: var(--muted);
+    transition: background .2s ease, color .2s ease, border-color .2s ease, transform .15s ease, box-shadow .2s;
+    -webkit-user-select: none; user-select: none;
   }
-  .pill.active { background: var(--pine); border-color: var(--pine); color: var(--white); }
-  .pill.active.gold { background: var(--gold); border-color: var(--gold); color: var(--pine); }
+  .pill:active { transform: scale(.97); }
+  .pill.active { background: var(--pine); border-color: var(--pine); color: #fff; box-shadow: 0 8px 18px -12px rgba(15,61,42,.9); }
+  .pill.gold.active { background: var(--gold); border-color: var(--gold); color: #1d1405; }
 
-  .badge { display: inline-block; padding: 3px 9px; border-radius: 999px; font-size: 11px; font-weight: 700; }
-  .badge-sched { background: #fdf0d5; color: #8a5a00; }
-  .badge-done { background: #e1f3e6; color: var(--profit); }
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 800; letter-spacing: .01em; white-space: nowrap; }
+  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .badge-sched { background: var(--warn-soft); color: var(--warn); }
+  .badge-done { background: var(--profit-soft); color: var(--profit); }
+  .badge-paid { background: var(--profit-soft); color: var(--profit); }
+  .badge-owed { background: var(--loss-soft); color: var(--loss); }
 
-  /* Filter chips */
-  .filter-bar { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; margin-bottom: 10px; }
+  /* ============ Jobs list ============ */
+  .toolbar { display: flex; gap: 8px; margin-bottom: 12px; }
+  .search { position: relative; flex: 1; min-width: 0; }
+  .search .ic { position: absolute; left: 13px; top: 50%; transform: translateY(-50%); width: 18px; height: 18px; color: var(--faint); pointer-events: none; }
+  .search input { padding-left: 38px; }
+  select.sort-select { width: auto; flex: 0 0 auto; font-size: 14px; font-weight: 600; }
+  .filter-bar { display: flex; gap: 7px; overflow-x: auto; padding: 2px 2px 6px; margin: 0 -2px 10px; scrollbar-width: none; }
+  .filter-bar::-webkit-scrollbar { display: none; }
   .chip {
-    flex: 0 0 auto; padding: 7px 12px; border-radius: 999px; border: 1.5px solid var(--border);
-    background: var(--white); font-size: 12.5px; font-weight: 700; color: var(--muted);
-    cursor: pointer; white-space: nowrap;
+    flex: 0 0 auto; padding: 8px 14px; border-radius: 999px; border: 1.5px solid var(--border);
+    background: var(--surface); font-size: 13px; font-weight: 700; color: var(--muted);
+    cursor: pointer; white-space: nowrap; transition: all .2s ease; -webkit-user-select: none; user-select: none;
   }
-  .chip.active { background: var(--pine); border-color: var(--pine); color: var(--white); }
+  .chip:active { transform: scale(.96); }
+  .chip.active { background: var(--pine); border-color: var(--pine); color: #fff; box-shadow: 0 8px 16px -10px rgba(15,61,42,.9); }
+  .job-list { display: grid; gap: 12px; }
+  .job-list > .card { margin-bottom: 0; }
 
-  /* Deposit / balance toggles */
-  .pay-row { display: flex; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
-  .pay-btn {
-    flex: 1; padding: 8px 6px; border-radius: 9px; border: 1.5px dashed var(--border);
-    background: var(--white); font-size: 11.5px; font-weight: 700; color: var(--muted); cursor: pointer;
-    display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1.3; text-align: center;
+  .job-card {
+    cursor: pointer; padding: 16px; position: relative;
+    transition: transform .2s var(--ease), box-shadow .25s ease, border-color .2s;
+    animation: cardIn .4s var(--ease) both;
   }
-  .pay-btn .amt { font-size: 13.5px; }
-  .pay-btn.paid { border-style: solid; border-color: var(--profit); background: #e1f3e6; color: var(--profit); }
-  .pay-btn.picking { outline: 2px solid var(--gold); outline-offset: 1px; }
-  .pay-btn .fee { font-size: 10.5px; font-weight: 600; color: var(--loss); }
-  .method-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-  .method-row .chip { padding: 6px 10px; font-size: 12px; }
-  .pay-line { background: var(--white); border: 1.5px solid var(--border); border-radius: 10px; padding: 10px; margin-bottom: 8px; }
-
-  .badge-paid { background: #e1f3e6; color: var(--profit); }
-  .badge-owed { background: #fde8e8; color: var(--loss); }
-
-  .empty-state { text-align: center; padding: 40px 16px; color: var(--muted); }
-  .empty-state .big { font-size: 40px; margin-bottom: 10px; }
-
-  /* Tech list */
-  .tech-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0; border-bottom: 1px solid var(--border); }
-  .payout-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--border); font-size: 14.5px; }
-  .payout-row:last-of-type { border-bottom: none; }
-  .payout-job { padding: 9px 0; border-top: 1px dashed var(--border); font-size: 12.5px; color: var(--muted); line-height: 1.45; }
-  .payout-job b { color: var(--text); }
-  .tech-row:last-child { border-bottom: none; }
-  .tech-name { font-weight: 700; }
-  .tech-meta { font-size: 12.5px; color: var(--muted); }
-  .icon-btn { background: none; border: none; font-size: 17px; cursor: pointer; padding: 6px; color: var(--muted); }
-  .icon-btn.danger { color: var(--red); }
-
-  /* Job card */
-  .job-card { cursor: pointer; }
-  .job-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-  .job-customer { font-weight: 800; font-size: 15.5px; }
-  .job-sub { font-size: 12.5px; color: var(--muted); margin-top: 2px; }
-  .job-metrics { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
-  .metric { }
-  .metric .lbl { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
-  .metric .val { font-weight: 800; font-size: 14.5px; }
+  .job-card:active { transform: scale(.985); }
+  @keyframes cardIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  .job-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+  .job-customer { font-weight: 800; font-size: 17px; letter-spacing: -.015em; line-height: 1.25; }
+  .job-sub { font-size: 13px; color: var(--muted); margin-top: 4px; line-height: 1.45; }
+  .job-metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; margin-top: 14px; padding: 12px; border-radius: 14px; background: var(--surface-2); }
+  .metric .lbl { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .07em; font-weight: 800; }
+  .metric .val { margin-top: 2px; font-weight: 800; font-size: 15px; letter-spacing: -.01em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .metric:nth-child(3) .val { font-size: 16.5px; }
   .val.pos { color: var(--profit); }
   .val.neg { color: var(--loss); }
 
-  /* Assignment builder */
-  .checkbox-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+  .pay-row { display: flex; gap: 8px; margin-top: 10px; }
+  .pay-btn {
+    flex: 1; min-width: 0; padding: 10px 8px; border-radius: 13px; border: 1.5px dashed var(--border-strong);
+    background: transparent; font-size: 12px; font-weight: 700; color: var(--muted); cursor: pointer;
+    display: flex; flex-direction: column; align-items: center; gap: 2px; line-height: 1.3; text-align: center;
+    transition: background .2s ease, border-color .2s ease, color .2s, transform .15s ease;
+  }
+  .pay-btn:active { transform: scale(.97); }
+  .pay-btn .amt { font-size: 14.5px; font-weight: 800; color: var(--text); font-variant-numeric: tabular-nums; }
+  .pay-btn.paid { border: 1.5px solid transparent; background: var(--profit-soft); color: var(--profit); }
+  .pay-btn.paid .amt { color: var(--profit); }
+  .pay-btn.picking { border-color: var(--gold); border-style: solid; box-shadow: 0 0 0 4px color-mix(in srgb, var(--gold) 22%, transparent); }
+  .pay-btn .fee { font-size: 11px; font-weight: 700; color: var(--loss); }
+  .method-row { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; animation: pageIn .25s var(--ease) both; }
+  .method-row .chip { padding: 8px 13px; font-size: 13px; }
+  .pay-line { background: var(--surface); border: 1.5px solid var(--border); border-radius: 14px; padding: 12px; margin-bottom: 8px; }
+
+  .empty-state { text-align: center; padding: 44px 18px; color: var(--muted); font-weight: 600; line-height: 1.5; }
+  .empty-state .big { font-size: 44px; margin-bottom: 10px; }
+
+  /* ============ Lists (techs, settings, payouts) ============ */
+  .tech-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .tech-row:last-child { border-bottom: none; }
+  .tech-name { font-weight: 700; font-size: 15px; }
+  .avatar {
+    flex: 0 0 auto; width: 40px; height: 40px; border-radius: 13px; display: grid; place-items: center;
+    font-size: 14px; font-weight: 800; letter-spacing: .02em; color: #fff;
+    background: linear-gradient(145deg, var(--pine3), var(--pine));
+    box-shadow: 0 6px 14px -8px rgba(15,61,42,.9);
+  }
+  .tech-meta { font-size: 12.5px; color: var(--muted); }
+  .payout-row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border); font-size: 14.5px; font-variant-numeric: tabular-nums; }
+  .payout-row:last-of-type { border-bottom: none; }
+  .payout-job { padding: 10px 0; border-top: 1px dashed var(--border); font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .payout-job b { color: var(--text); }
+  .icon-btn {
+    display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 11px;
+    background: none; border: none; cursor: pointer; color: var(--muted); font-size: 16px;
+    transition: background .2s ease, color .2s ease, transform .15s;
+  }
+  .icon-btn .ic { width: 19px; height: 19px; }
+  .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+  .icon-btn:active { transform: scale(.92); }
+  .icon-btn.danger { color: var(--faint); }
+  .icon-btn.danger:hover { background: var(--loss-soft); color: var(--loss); }
+
+  /* ============ Job form pieces ============ */
+  .form-section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; margin-bottom: 12px; box-shadow: var(--shadow-sm); }
+  .form-section > label:first-child { font-size: 13px; color: var(--text); font-weight: 800; letter-spacing: -.005em; }
+  .form-section .card { box-shadow: none; background: var(--surface-2); }
+  .checkbox-row { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
   .checkbox-row:last-child { border-bottom: none; }
-  .checkbox-row input[type=checkbox] { width: 19px; height: 19px; accent-color: var(--pine); }
-  .checkbox-row .nm { font-weight: 700; flex: 1; }
+  .checkbox-row input[type=checkbox] { width: 21px; height: 21px; accent-color: var(--pine); cursor: pointer; }
+  .checkbox-row .nm { font-weight: 700; flex: 1; min-width: 0; }
   .color-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-  .color-pill { padding: 8px 6px; line-height: 1.25; }
-  .color-sub { font-size: 11px; font-weight: 500; opacity: .8; }
-  .inv-grid { display: grid; grid-template-columns: 1fr 76px 58px 74px; gap: 6px; align-items: center; padding: 6px 0; border-bottom: 1px solid var(--border); }
-  .other-grid { display: grid; grid-template-columns: 1fr 64px 1fr 30px; gap: 6px; align-items: center; margin-bottom: 6px; }
-  .inv-grid input, .other-grid input { padding: 7px 8px; font-size: 15px; }
-  .inv-head { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; padding: 0 0 4px; }
-  .inv-name { font-weight: 700; font-size: 14px; cursor: pointer; }
-  .inv-name-edit { display: flex; align-items: center; gap: 2px; }
-  .inv-num { text-align: right; font-weight: 600; font-size: 14px; }
-  .inv-left { text-align: right; font-weight: 800; font-size: 13.5px; }
-  .inv-left.ok { color: var(--profit); }
-  .inv-left.short { color: var(--loss); }
-  .inv-uses { background: var(--bg); border-radius: 8px; padding: 4px 10px; margin: 4px 0 8px; font-size: 12.5px; color: var(--muted); }
-  .inv-use { display: flex; justify-content: space-between; gap: 8px; padding: 6px 0; border-bottom: 1px dashed var(--border); cursor: pointer; font-size: 12.5px; }
-  .inv-use:last-child { border-bottom: none; }
-  .inv-use b { color: var(--text); }
-  .mini-grid { display: grid; grid-template-columns: 1fr 66px 66px 30px; gap: 6px; align-items: center; margin-bottom: 6px; }
-  .mini-grid input[type=text], .mini-grid input[type=number] { padding: 8px 9px; font-size: 15px; }
-  .mini-head { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; margin-bottom: 4px; }
+  .color-pill { padding: 10px 8px; line-height: 1.3; position: relative; overflow: hidden; }
+  .color-sub { font-size: 11.5px; font-weight: 600; opacity: .78; }
+  .color-pill::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: 5px; height: 3px; border-radius: 3px; opacity: .85; }
+  .color-grid .color-pill:nth-child(1)::after { background: #ffd98a; }
+  .color-grid .color-pill:nth-child(2)::after { background: repeating-linear-gradient(90deg, #e53935 0 10px, #ffffff 10px 20px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+  .color-grid .color-pill:nth-child(3)::after { background: repeating-linear-gradient(90deg, #e53935 0 10px, #2fbf71 10px 20px, #ffffff 20px 30px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
+  .color-grid .color-pill:nth-child(4)::after { background: linear-gradient(90deg, #e53935, #ffb703, #2fbf71, #3d8bfd, #b05cff); }
+
+  .tech-pct { display: flex; align-items: center; gap: 5px; }
+  .checkbox-row input.pct-input { width: 70px; padding: 8px 9px; font-size: 15px; text-align: right; }
+  .tech-amt { min-width: 76px; text-align: right; font-weight: 800; color: var(--profit); font-size: 14px; font-variant-numeric: tabular-nums; }
+
+  .mini-grid { display: grid; grid-template-columns: minmax(0,1fr) 70px 70px 36px; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .mini-grid input[type=text], .mini-grid input[type=number] { padding: 9px 10px; font-size: 15px; }
+  .mini-head { font-size: 10.5px; font-weight: 800; color: var(--faint); text-transform: uppercase; letter-spacing: .07em; margin-bottom: 4px; }
+
   .drop-zone {
-    display: block; margin: 0; text-align: center; padding: 22px 14px; cursor: pointer;
-    border: 2px dashed var(--border); border-radius: 12px; background: var(--white);
-    color: var(--muted); font-size: 13.5px; font-weight: 500;
+    display: block; margin: 0; text-align: center; padding: 24px 16px; cursor: pointer;
+    border: 2px dashed var(--border-strong); border-radius: 16px; background: var(--surface-2);
+    color: var(--muted); font-size: 13.5px; font-weight: 600; transition: border-color .2s, background .2s, transform .15s;
   }
-  .drop-zone.over { border-color: var(--pine3); background: #eef7f1; }
-  .drop-zone.compact { padding: 12px 14px; margin-top: 8px; }
-  .pic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
-  .pic-tile { position: relative; aspect-ratio: 1 / 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--white); }
-  .pic-tile img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
-  .pic-placeholder { height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 6px; font-size: 11.5px; color: var(--muted); }
-  .pic-remove { position: absolute; top: 4px; right: 4px; width: 26px; height: 26px; border-radius: 50%; border: none; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; cursor: pointer; display: flex; align-items: center; justify-content: center; }
-  .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 44px; height: 64px; border: none; border-radius: 10px; background: rgba(255,255,255,.15); color: #fff; font-size: 34px; cursor: pointer; }
-  .lightbox-nav.prev { left: 10px; }
-  .lightbox-nav.next { right: 10px; }
-  .lightbox { position: fixed; inset: 0; z-index: 70; background: rgba(5,10,8,.92); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; cursor: zoom-out; }
-  .lightbox img { max-width: 100%; max-height: 88vh; object-fit: contain; border-radius: 6px; }
-  .lightbox-close { color: rgba(255,255,255,.75); font-size: 13px; margin-top: 10px; }
-  .tech-pct { display: flex; align-items: center; gap: 4px; }
-  .checkbox-row input.pct-input { width: 66px; padding: 7px 8px; font-size: 15px; text-align: right; }
-  .tech-amt { min-width: 74px; text-align: right; font-weight: 700; color: var(--profit); font-size: 13.5px; }
+  .drop-zone b { color: var(--text); }
+  .drop-zone:hover { border-color: var(--pine3); }
+  .drop-zone.over { border-color: var(--pine3); background: var(--profit-soft); transform: scale(1.01); }
+  .drop-zone.compact { padding: 13px 16px; margin-top: 10px; }
+  .pic-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 8px; }
+  .pic-tile { position: relative; aspect-ratio: 1 / 1; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); animation: cardIn .35s var(--ease) both; }
+  .pic-tile img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; transition: transform .35s var(--ease); }
+  .pic-tile img:hover { transform: scale(1.04); }
+  .pic-placeholder { height: 100%; display: flex; align-items: center; justify-content: center; text-align: center; padding: 8px; font-size: 11.5px; color: var(--muted); }
+  .pic-remove { position: absolute; top: 6px; right: 6px; width: 28px; height: 28px; border-radius: 50%; border: none; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; cursor: pointer; display: grid; place-items: center; backdrop-filter: blur(4px); }
+  .lightbox { position: fixed; inset: 0; z-index: 90; background: rgba(4,8,6,.94); display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; cursor: zoom-out; animation: fadeIn .2s ease both; }
+  .lightbox img { max-width: 100%; max-height: 86vh; object-fit: contain; border-radius: 10px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.8); animation: popIn .3s var(--ease) both; }
+  .lightbox-close { color: rgba(255,255,255,.7); font-size: 13px; font-weight: 600; margin-top: 12px; }
+  .lightbox-nav { position: absolute; top: 50%; transform: translateY(-50%); width: 46px; height: 64px; border: none; border-radius: 14px; background: rgba(255,255,255,.12); color: #fff; font-size: 34px; cursor: pointer; backdrop-filter: blur(6px); }
+  .lightbox-nav.prev { left: 12px; }
+  .lightbox-nav.next { right: 12px; }
 
-  /* Modal */
+  /* ============ Bottom sheets / dialogs ============ */
   .modal-overlay {
-    position: fixed; inset: 0; background: rgba(10,20,15,.55); z-index: 50;
-    display: flex; align-items: flex-end; justify-content: center;
+    position: fixed; inset: 0; z-index: 60; display: flex; align-items: flex-end; justify-content: center;
+    background: rgba(5,12,8,.5); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+    animation: fadeIn .25s ease both;
   }
+  .modal-overlay.closing { animation: fadeOut .2s ease both; }
   .modal {
-    background: var(--bg); width: 100%; max-width: 560px; max-height: 92vh; overflow-y: auto;
-    border-radius: 18px 18px 0 0; padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    width: 100%; max-width: 680px; max-height: 94vh; display: flex; flex-direction: column; overflow: hidden;
+    background: var(--bg); border-radius: 28px 28px 0 0; box-shadow: var(--shadow-lg);
+    animation: sheetUp .42s var(--ease) both;
   }
-  .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; position: sticky; top: 0; background: var(--bg); padding-top: 2px; }
-  .modal-head h2 { font-family: 'Oswald', sans-serif; font-size: 17px; color: var(--pine); }
-  .close-x { background: none; border: none; font-size: 22px; color: var(--muted); cursor: pointer; padding: 4px 8px; }
-
-  .summary-box {
-    background: var(--pine); color: var(--white); border-radius: 12px; padding: 12px 14px; margin-top: 14px;
+  .modal-overlay.closing .modal { animation: sheetDown .2s ease-in both; }
+  .modal-head {
+    position: relative; display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 20px 14px 12px 20px; border-bottom: 1px solid var(--border); background: var(--bg);
   }
-  .summary-box .row { padding: 3px 0; font-size: 13.5px; }
-  .summary-box .row.total { border-top: 1px solid rgba(255,255,255,.25); margin-top: 6px; padding-top: 8px; font-weight: 800; font-size: 15px; }
-  .summary-box .row .lab { color: rgba(255,255,255,.75); }
-  .summary-box .row.total .lab { color: var(--white); }
+  .modal-head::before { content: ''; position: absolute; top: 8px; left: 50%; width: 40px; height: 5px; border-radius: 3px; background: var(--border-strong); transform: translateX(-50%); }
+  .modal-head h2 { font-size: 20px; font-weight: 800; letter-spacing: -.02em; }
+  .close-x { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 12px; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); cursor: pointer; transition: background .2s, transform .15s; }
+  .close-x:active { transform: scale(.92); }
+  .close-x .ic { width: 18px; height: 18px; }
+  .modal-body { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; padding: 16px 16px 20px; }
+  .modal-foot {
+    display: flex; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--border); background: var(--surface);
+  }
+  .modal-foot .btn { flex: 1; padding: 14px 18px; font-size: 15.5px; }
+  .modal-foot .btn-primary { flex: 2; }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; } }
+  @keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+  @keyframes sheetDown { from { transform: none; } to { transform: translateY(100%); } }
+  @keyframes popIn { from { opacity: 0; transform: scale(.96) translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes popOut { from { opacity: 1; transform: none; } to { opacity: 0; transform: scale(.97) translateY(6px); } }
 
-  /* Dashboard */
+  .summary-box { background: var(--summary-bg); color: var(--summary-ink); border-radius: var(--radius); padding: 16px 18px; margin-top: 4px; box-shadow: var(--shadow-md); }
+  .summary-box .row { padding: 4px 0; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .summary-box .row.total { border-top: 1px solid rgba(255,255,255,.18); margin-top: 8px; padding-top: 10px; font-weight: 800; font-size: 16px; }
+  .summary-box .row .lab { color: var(--summary-sub); }
+  .summary-box .row.total .lab { color: var(--summary-ink); }
+  .good-on-dark { color: var(--good-on-dark); }
+  .bad-on-dark { color: var(--bad-on-dark); }
+
+  /* ============ Toasts ============ */
+  .toaster { position: fixed; left: 0; right: 0; bottom: calc(160px + env(safe-area-inset-bottom)); z-index: 95; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; padding: 0 16px; }
+  .toast {
+    display: inline-flex; align-items: center; gap: 8px; max-width: 100%;
+    padding: 11px 16px; border-radius: 14px; background: #13221a; color: #fff; font-size: 14px; font-weight: 700;
+    box-shadow: 0 18px 40px -14px rgba(0,0,0,.6); border: 1px solid rgba(255,255,255,.08);
+    animation: toastLife 2.6s var(--ease) both;
+  }
+  .toast .ic { width: 18px; height: 18px; color: var(--good-on-dark); stroke-width: 2.4; }
+  @keyframes toastLife { 0% { opacity: 0; transform: translateY(12px) scale(.96); } 10% { opacity: 1; transform: none; } 85% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(6px); } }
+
+  /* ============ Dashboard ============ */
   .stat-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 12px; }
-  .stat-card .lbl { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; font-weight: 700; }
-  .stat-card .val { font-size: 19px; font-weight: 800; margin-top: 4px; }
+  .stat-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; box-shadow: var(--shadow-sm); animation: cardIn .4s var(--ease) both; }
+  .stat-card .lbl { font-size: 10.5px; color: var(--faint); text-transform: uppercase; letter-spacing: .07em; font-weight: 800; }
+  .stat-card .val { font-size: 22px; font-weight: 800; letter-spacing: -.02em; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .dash-grid { display: grid; gap: 12px; }
+  .dash-grid > .card { margin-bottom: 0; }
 
-  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
-  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--border); }
-  th { color: var(--muted); font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; cursor: pointer; white-space: nowrap; }
-  th.sorted { color: var(--pine); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 10px 8px; border-bottom: 1px solid var(--border); }
+  tbody tr { transition: background .15s; }
+  tbody tr:hover { background: var(--surface-2); }
+  th { color: var(--faint); font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; font-weight: 800; cursor: pointer; white-space: nowrap; -webkit-user-select: none; user-select: none; }
+  th.sorted { color: var(--pine3); }
   td.num, th.num { text-align: right; }
-  .table-wrap { overflow-x: auto; }
-
+  .table-wrap { overflow-x: auto; margin: 0 -4px; }
   canvas { max-width: 100%; }
 
-  select.sort-select { width: auto; display: inline-block; padding: 7px 10px; font-size: 13px; }
+  /* ============ Inventory ============ */
+  .inv-layout, .settings-grid, .techs-layout, .expense-list { display: grid; gap: 12px; }
+  .inv-layout > .card, .settings-grid > .card, .techs-layout > .card, .expense-list > .card { margin-bottom: 0; }
+  .inv-grid { display: grid; grid-template-columns: minmax(0,1fr) 78px 60px 78px; gap: 6px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .other-grid { display: grid; grid-template-columns: minmax(0,1fr) 66px minmax(0,1fr) 36px; gap: 6px; align-items: center; margin-bottom: 6px; }
+  .inv-grid input, .other-grid input { padding: 8px 9px; font-size: 15px; }
+  .inv-head { font-size: 10.5px; font-weight: 800; color: var(--faint); text-transform: uppercase; letter-spacing: .07em; padding: 0 0 6px; }
+  .inv-name { font-weight: 700; font-size: 14px; cursor: pointer; }
+  .inv-name-edit { display: flex; align-items: center; gap: 2px; min-width: 0; }
+  .inv-num { text-align: right; font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+  .inv-left { text-align: right; font-weight: 800; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+  .inv-left.ok { color: var(--profit); }
+  .inv-left.short { color: var(--loss); }
+  .inv-uses { background: var(--surface-2); border-radius: 12px; padding: 4px 12px; margin: 6px 0 8px; font-size: 12.5px; color: var(--muted); animation: pageIn .25s var(--ease) both; }
+  .inv-use { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--border); cursor: pointer; font-size: 12.5px; }
+  .inv-use:last-child { border-bottom: none; }
+  .inv-use b { color: var(--text); }
 
+  .btn-google {
+    display: flex; align-items: center; gap: 10px; background: #fff; color: #3c4043;
+    border: 1.5px solid var(--border); border-radius: 13px; padding: 12px 16px; font-weight: 700; font-size: 14.5px; cursor: pointer;
+  }
+  .msg-err { color: var(--loss); font-size: 12.5px; margin-top: 8px; }
+
+  /* ============ Desktop ============ */
+  @media (hover: hover) {
+    .job-card:hover { transform: translateY(-2px); box-shadow: var(--shadow-md); border-color: var(--border-strong); }
+    .stat-card:hover { box-shadow: var(--shadow-md); }
+  }
   @media (min-width: 640px) {
     .stat-grid { grid-template-columns: repeat(4, 1fr); }
+  }
+  @media (min-width: 1024px) {
+    .desktop-only { display: revert !important; }
+    .mobile-only { display: none !important; }
+    #root { padding-bottom: 40px; padding-left: 264px; }
+    .app-header { box-shadow: 0 12px 30px -20px rgba(0,0,0,.55); }
+    .header-inner { padding: 22px 36px 28px; max-width: 1240px; }
+    main { max-width: 1240px; padding: 26px 36px 40px; }
+    .tab-bar {
+      left: 0; top: 0; bottom: 0; right: auto; width: 264px; max-width: none; margin: 0;
+      flex-direction: column; gap: 4px; padding: 22px 16px 18px; border-radius: 0;
+      border: 0; border-right: 1px solid var(--border); background: var(--surface);
+      backdrop-filter: none; -webkit-backdrop-filter: none; box-shadow: none;
+    }
+    .nav-brand { display: flex; align-items: center; gap: 11px; padding: 4px 8px 22px; margin-bottom: 8px; border-bottom: 1px solid var(--border); }
+    .nav-brand .brand-mark { background: var(--header-bg); color: #fff; box-shadow: 0 8px 18px -8px rgba(15,61,42,.7); }
+    .nav-brand .brand-text small { color: var(--muted); }
+    .tab-list { flex: 0 0 auto; flex-direction: column; gap: 4px; }
+    .tab-indicator { top: 0; bottom: auto; left: 0; width: 100%; height: 46px; border-radius: 13px; transform: translateY(calc(var(--idx) * 50px)); }
+    .tab-btn { flex: 0 0 auto; flex-direction: row; justify-content: flex-start; gap: 13px; height: 46px; padding: 0 14px; font-size: 14.5px; font-weight: 650; border-radius: 13px; color: var(--muted); }
+    .tab-btn:hover { color: var(--text); }
+    .tab-btn.active { color: var(--pine3); font-weight: 800; }
+    .tab-btn .ic { width: 21px; height: 21px; }
+    .tab-btn.active .ic { transform: none; }
+    .nav-foot { display: block; margin-top: auto; padding: 14px 8px 0; border-top: 1px solid var(--border); font-size: 12px; color: var(--faint); font-weight: 600; }
+    .nav-foot .sync-pill { color: var(--text); border-color: var(--border); background: var(--surface-2); width: 100%; justify-content: center; margin-bottom: 10px; }
+    .nav-foot .sync-pill.ok { color: var(--profit); }
+    .nav-foot .sync-pill.err { color: var(--loss); }
+    .fab { right: 40px; bottom: 34px; }
+    .toaster { bottom: 34px; left: 264px; }
+
+    .job-list { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+    .dash-grid { grid-template-columns: 1fr 1fr; gap: 16px; }
+    .inv-layout { grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    .inv-layout > .card:first-child, .inv-layout > .inv-wide { grid-column: 1 / -1; }
+    .settings-grid { grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+    .techs-layout { grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr); gap: 16px; align-items: start; }
+    .expense-list { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
+    .stat-card .val { font-size: 26px; }
+
+    .modal-overlay { align-items: center; padding: 28px; }
+    .modal { border-radius: 26px; max-height: 88vh; animation: popIn .3s var(--ease) both; }
+    .modal-overlay.closing .modal { animation: popOut .18s ease-in both; }
+    .modal-head { padding: 20px 18px 16px 24px; }
+    .modal-head::before { display: none; }
+    .modal-body { padding: 20px 24px 24px; }
+    .modal-foot { padding: 14px 24px; justify-content: flex-end; }
+    .modal-foot .btn { flex: 0 0 auto; min-width: 140px; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   }
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root"><div class="splash" role="status" aria-label="Loading">
+  <div class="splash-inner">
+    <div class="splash-tree">🎄</div>
+    <div class="splash-title">Christmas Lights</div>
+    <div class="splash-sub">JOB TRACKER</div>
+    <div class="string-lights"><span style="--i:0"></span><span style="--i:1"></span><span style="--i:2"></span><span style="--i:3"></span><span style="--i:4"></span><span style="--i:5"></span><span style="--i:6"></span></div>
+  </div>
+</div></div>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useRef, useMemo } = React;
 
@@ -738,6 +1021,118 @@ function weeklyPayouts(jobs, settings) {
   return Object.values(weeks).sort((a, b) => b.key.localeCompare(a.key));
 }
 
+// ================= UI kit: icons, toasts, sheets =================
+const ICON_PATHS = {
+  jobs: <><path d="M9 4h6a1 1 0 0 1 1 1v1H8V5a1 1 0 0 1 1-1z" /><path d="M8 5H6.5A1.5 1.5 0 0 0 5 6.5v13A1.5 1.5 0 0 0 6.5 21h11a1.5 1.5 0 0 0 1.5-1.5v-13A1.5 1.5 0 0 0 17.5 5H16" /><path d="M8.5 11h7M8.5 15h4.5" /></>,
+  inventory: <><path d="M3.5 7.5 12 3l8.5 4.5v9L12 21l-8.5-4.5z" /><path d="M3.5 7.5 12 12l8.5-4.5M12 12v9" /></>,
+  techs: <><circle cx="9" cy="8" r="3.2" /><path d="M3 19.5c0-3.3 2.7-5.5 6-5.5s6 2.2 6 5.5" /><path d="M16 5.2a3 3 0 0 1 0 5.6M17.5 14.3c2.1.6 3.5 2.4 3.5 5.2" /></>,
+  expenses: <><path d="M6 3h12v18l-2.5-1.6L13 21l-2.5-1.6L8 21l-2-1.3z" /><path d="M9 8h6M9 12h6M9 16h3.5" /></>,
+  dashboard: <><rect x="4" y="11" width="3.6" height="9" rx="1.2" /><rect x="10.2" y="5" width="3.6" height="15" rx="1.2" /><rect x="16.4" y="13.5" width="3.6" height="6.5" rx="1.2" /></>,
+  settings: <><path d="M4 7h9M17 7h3M4 17h3M11 17h9" /><circle cx="15" cy="7" r="2.2" /><circle cx="9" cy="17" r="2.2" /></>,
+  plus: <path d="M12 5v14M5 12h14" />,
+  trash: <><path d="M4 7h16M10 11v6M14 11v6" /><path d="M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7M9 7V4.5A1.5 1.5 0 0 1 10.5 3h3A1.5 1.5 0 0 1 15 4.5V7" /></>,
+  edit: <><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17z" /><path d="M14 7l3 3" /></>,
+  close: <path d="M6 6l12 12M18 6 6 18" />,
+  search: <><circle cx="11" cy="11" r="6.5" /><path d="m20 20-4.2-4.2" /></>,
+  check: <path d="M5 12.5l4.5 4.5L19 7.5" />,
+};
+const Icon = ({ name }) => <svg className="ic" viewBox="0 0 24 24" aria-hidden="true">{ICON_PATHS[name]}</svg>;
+
+// Short confirmations ("Job saved") shown after actions. Any component can call toast().
+const toastBus = new EventTarget();
+const toast = (message) => toastBus.dispatchEvent(new CustomEvent('toast', { detail: message }));
+function Toaster() {
+  const [items, setItems] = useState([]);
+  useEffect(() => {
+    const onToast = (e) => {
+      const id = uid();
+      setItems(list => [...list.slice(-1), { id, message: e.detail }]);
+      setTimeout(() => setItems(list => list.filter(t => t.id !== id)), 2600);
+    };
+    toastBus.addEventListener('toast', onToast);
+    return () => toastBus.removeEventListener('toast', onToast);
+  }, []);
+  return (
+    <div className="toaster" aria-live="polite">
+      {items.map(t => <div key={t.id} className="toast"><Icon name="check" />{t.message}</div>)}
+    </div>
+  );
+}
+
+// Bottom sheet on phones, centered dialog on desktop. Animates in and out, closes on the
+// backdrop or Escape, and keeps the page behind it from scrolling. `footer` gets close().
+function Sheet({ title, onClose, footer, children }) {
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
+  const close = () => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    setClosing(true);
+    setTimeout(onClose, 190);
+  };
+  const closeRef = useRef(close);
+  closeRef.current = close;
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === 'Escape' && !document.querySelector('.lightbox')) closeRef.current(); };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.removeEventListener('keydown', onKey); document.body.style.overflow = prevOverflow; };
+  }, []);
+  return (
+    <div className={'modal-overlay' + (closing ? ' closing' : '')} onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
+      <div className="modal" role="dialog" aria-modal="true" aria-label={title}>
+        <div className="modal-head">
+          <h2>{title}</h2>
+          <button className="close-x" onClick={close} aria-label="Close"><Icon name="close" /></button>
+        </div>
+        <div className="modal-body">{children}</div>
+        {footer && <div className="modal-foot">{footer(close)}</div>}
+      </div>
+    </div>
+  );
+}
+
+// Light/dark appearance: follows the device unless set here. Saved per device, not synced.
+const THEME_KEY = 'xmasTheme';
+const getThemePref = () => { try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) { return 'auto'; } };
+function applyTheme(pref) {
+  try { if (pref === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, pref); } catch (e) {}
+  if (pref === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', pref);
+  window.dispatchEvent(new Event('xmas-theme'));
+}
+// Changes whenever the effective theme might have changed, so charts can redraw in the new colors.
+function useThemeVersion() {
+  const [version, setVersion] = useState(0);
+  useEffect(() => {
+    const bump = () => setVersion(n => n + 1);
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    if (mq.addEventListener) mq.addEventListener('change', bump); else mq.addListener(bump);
+    window.addEventListener('xmas-theme', bump);
+    return () => {
+      if (mq.removeEventListener) mq.removeEventListener('change', bump); else mq.removeListener(bump);
+      window.removeEventListener('xmas-theme', bump);
+    };
+  }, []);
+  return version;
+}
+
+const StringLights = ({ count = 60 }) => (
+  <div className="string-lights" aria-hidden="true">
+    {Array.from({ length: count }, (_, i) => <span key={i} style={{ '--i': i }} />)}
+  </div>
+);
+
+const TABS = [
+  { id: 'jobs', label: 'Jobs', icon: 'jobs' },
+  { id: 'inventory', label: 'Inventory', icon: 'inventory' },
+  { id: 'techs', label: 'Techs', icon: 'techs' },
+  { id: 'expenses', label: 'Expenses', icon: 'expenses' },
+  { id: 'dashboard', label: 'Dashboard', icon: 'dashboard' },
+  { id: 'settings', label: 'Settings', icon: 'settings' },
+];
+
 // ================= App =================
 function App() {
   const initial = useMemo(loadData, []);
@@ -903,9 +1298,11 @@ function App() {
     setSettings(d.settings);
     // A backup from before the Inventory tab has no inventory; keep the current one then.
     if (Array.isArray(raw.inventory)) setInventory(d.inventory);
+    toast('Backup restored');
   };
 
   const upsertTech = (t) => {
+    toast(techs.some(x => x.id === t.id) ? 'Tech saved' : 'Tech added');
     setTechs(prev => {
       const exists = prev.some(x => x.id === t.id);
       return exists ? prev.map(x => x.id === t.id ? t : x) : [...prev, t];
@@ -919,10 +1316,12 @@ function App() {
     setTechs(prev => hasHistory ? prev.map(t => t.id === id ? { ...t, removed: true } : t) : prev.filter(t => t.id !== id));
     setJobs(prev => prev.map(j => j.status === 'Completed' ? j
       : { ...j, assignments: (j.assignments || []).filter(a => a.techId !== id) }));
+    toast('Tech removed');
   };
   const activeTechs = techs.filter(t => !t.removed);
 
   const upsertJob = (j) => {
+    toast(jobs.some(x => x.id === j.id) ? 'Job saved' : 'Job added');
     setJobs(prev => {
       const exists = prev.some(x => x.id === j.id);
       return exists ? prev.map(x => x.id === j.id ? j : x) : [j, ...prev];
@@ -932,31 +1331,67 @@ function App() {
     const job = jobs.find(j => j.id === id);
     if (job) mockupIdsOf(job).forEach(deleteMockup);
     setJobs(prev => prev.filter(j => j.id !== id));
+    toast('Job deleted');
   };
-  const setPayment = (id, which, paid, method) => setJobs(prev => prev.map(j => j.id !== id ? j
-    : { ...withoutPayment(j, which), ...paymentFields(j, which, paid, method, settings) }));
+  const setPayment = (id, which, paid, method) => {
+    const name = which === 'deposit' ? 'Deposit' : 'Balance';
+    toast(paid ? `${name} recorded · ${method}` : `${name} marked unpaid`);
+    setJobs(prev => prev.map(j => j.id !== id ? j
+      : { ...withoutPayment(j, which), ...paymentFields(j, which, paid, method, settings) }));
+  };
 
   const upsertExpense = (ex) => {
+    toast(expenses.some(x => x.id === ex.id) ? 'Expense saved' : 'Expense added');
     setExpenses(prev => {
       const exists = prev.some(x => x.id === ex.id);
       return exists ? prev.map(x => x.id === ex.id ? ex : x) : [ex, ...prev];
     });
   };
-  const deleteExpense = (id) => setExpenses(prev => prev.filter(e => e.id !== id));
+  const deleteExpense = (id) => { setExpenses(prev => prev.filter(e => e.id !== id)); toast('Expense deleted'); };
+
+  // Page titles, a one-line summary for each tab, and tab switching that starts at the top.
+  const goTab = (id) => { setTab(id); window.scrollTo(0, 0); };
+  const owedTotal = jobs.reduce((s, j) => s + jobPayments(j).outstanding, 0);
+  const expenseTotal = expenses.reduce((s, e) => s + (Number(e.amount) || 0), 0);
+  const pageSub = {
+    jobs: `${jobs.length} job${jobs.length === 1 ? '' : 's'}${owedTotal > 0 ? ` · ${fmtMoney(owedTotal)} still owed` : ''}`,
+    inventory: 'Stock vs. what your jobs need',
+    techs: `${activeTechs.length} on the crew · weekly payouts`,
+    expenses: `${fmtMoney(expenseTotal)} logged`,
+    dashboard: 'Completed, paid-in-full jobs',
+    settings: 'Sync, rates, crew & backups',
+  }[tab];
+  const pageTitle = (TABS.find(t => t.id === tab) || TABS[0]).label;
+  const syncButton = (
+    <button className={"sync-pill" + (user && syncState === 'synced' ? ' ok' : '') + (syncState === 'error' ? ' err' : '')}
+      onClick={() => goTab('settings')}>
+      {!user ? '☁️ Sign in to sync' : syncState === 'saving' ? '☁️ Saving…' : syncState === 'error' ? '⚠️ Sync error' : '✓ Synced'}
+    </button>
+  );
+  const fab = { jobs: ['New job', () => setJobModal({})], techs: ['Add tech', () => setTechModal({})], expenses: ['Add expense', () => setExpenseModal({})] }[tab];
 
   return (
     <React.Fragment>
       <header className="app-header">
         <div className="header-inner">
-          <span className="emoji">🎄</span>
-          <h1>Christmas Lights</h1>
-          <button className={"sync-pill" + (user && syncState === 'synced' ? ' ok' : '') + (syncState === 'error' ? ' err' : '')}
-            onClick={() => setTab('settings')}>
-            {!user ? '☁️ Sign in to sync' : syncState === 'saving' ? '☁️ Saving…' : syncState === 'error' ? '⚠️ Sync error' : '✓ Synced'}
-          </button>
+          <div className="brand mobile-only">
+            <span className="brand-mark">🎄</span>
+            <div className="brand-text">Christmas Lights<small>Job Tracker</small></div>
+          </div>
+          <div className="header-title desktop-only">
+            <div className="page-title">{pageTitle}</div>
+            <div className="page-sub">{pageSub}</div>
+          </div>
+          {syncButton}
         </div>
+        <StringLights />
       </header>
       <main>
+        <div className="page-head mobile-only">
+          <h2 className="page-title">{pageTitle}</h2>
+          <div className="page-sub">{pageSub}</div>
+        </div>
+        <div key={tab} className="page-enter">
         {tab === 'jobs' && (
           <JobsTab jobs={jobs} techs={techs} settings={settings}
             onAdd={() => setJobModal({})}
@@ -990,38 +1425,32 @@ function App() {
             inventory={inventory}
             user={user} syncState={syncState} authError={authError} signIn={signIn} signOut={signOut} onImport={importData} />
         )}
+        </div>
       </main>
 
-      {tab === 'jobs' && (
-        <div className="fab-wrap"><button className="fab" onClick={() => setJobModal({})} aria-label="Add job">+</button></div>
-      )}
-      {tab === 'techs' && (
-        <div className="fab-wrap"><button className="fab" onClick={() => setTechModal({})} aria-label="Add tech">+</button></div>
-      )}
-      {tab === 'expenses' && (
-        <div className="fab-wrap"><button className="fab" onClick={() => setExpenseModal({})} aria-label="Add expense">+</button></div>
+      {fab && (
+        <div className="fab-wrap">
+          <button key={tab} className="fab" onClick={fab[1]} aria-label={fab[0]}><Icon name="plus" />{fab[0]}</button>
+        </div>
       )}
 
-      <nav className="tab-bar">
-        <button className={"tab-btn" + (tab === 'jobs' ? ' active' : '')} onClick={() => setTab('jobs')}>
-          <span className="ic">🧾</span>Jobs
-        </button>
-        <button className={"tab-btn" + (tab === 'inventory' ? ' active' : '')} onClick={() => setTab('inventory')}>
-          <span className="ic">📦</span>Inventory
-        </button>
-        <button className={"tab-btn" + (tab === 'techs' ? ' active' : '')} onClick={() => setTab('techs')}>
-          <span className="ic">👷</span>Techs
-        </button>
-        <button className={"tab-btn" + (tab === 'expenses' ? ' active' : '')} onClick={() => setTab('expenses')}>
-          <span className="ic">💸</span>Expenses
-        </button>
-        <button className={"tab-btn" + (tab === 'dashboard' ? ' active' : '')} onClick={() => setTab('dashboard')}>
-          <span className="ic">📊</span>Dashboard
-        </button>
-        <button className={"tab-btn" + (tab === 'settings' ? ' active' : '')} onClick={() => setTab('settings')}>
-          <span className="ic">⚙️</span>Settings
-        </button>
+      <nav className="tab-bar" aria-label="Sections">
+        <div className="nav-brand">
+          <span className="brand-mark">🎄</span>
+          <div className="brand-text">Christmas Lights<small>Job Tracker</small></div>
+        </div>
+        <div className="tab-list">
+          <span className="tab-indicator" style={{ '--idx': Math.max(0, TABS.findIndex(t => t.id === tab)) }} />
+          {TABS.map(t => (
+            <button key={t.id} className={"tab-btn" + (tab === t.id ? ' active' : '')} onClick={() => goTab(t.id)}
+              aria-current={tab === t.id ? 'page' : undefined}>
+              <Icon name={t.icon} />{t.label}
+            </button>
+          ))}
+        </div>
+        <div className="nav-foot">{syncButton}</div>
       </nav>
+      <Toaster />
 
       {techModal && (
         <TechModal tech={techModal} onClose={() => setTechModal(null)}
@@ -1075,9 +1504,10 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
     setInventory(prev => prev.some(i => i.kind === kind && sameName(i.name, name))
       ? prev.map(i => i.kind === kind && sameName(i.name, name) ? { ...i, qty } : i)
       : [...prev, { id: uid(), kind, name, qty }]);
+    toast('Stock updated');
   };
-  const updateItem = (id, patch) => setInventory(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i));
-  const removeItem = (id) => setInventory(prev => prev.filter(i => i.id !== id));
+  const updateItem = (id, patch) => { setInventory(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i)); toast('Stock updated'); };
+  const removeItem = (id) => { setInventory(prev => prev.filter(i => i.id !== id)); toast('Removed from inventory'); };
   const addItem = (kind) => setInventory(prev => [...prev, { id: uid(), kind, name: '', qty: 0 }]);
 
   // Need rounds up: a job can't use a fraction of a foot of line.
@@ -1126,8 +1556,8 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
   };
 
   return (
-    <div>
-      <div className="card" style={shortages.length ? { borderColor: 'var(--loss)' } : {}}>
+    <div className="inv-layout">
+      <div className="card" style={shortages.length ? { borderColor: 'var(--loss)', boxShadow: '0 0 0 3px var(--loss-soft)' } : {}}>
         <div className="section-title">{shortages.length ? 'Need to Order' : 'Stock Check'}</div>
         {shortages.length === 0 ? (
           <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers and mini lights for every job since your stock count.</div>
@@ -1147,7 +1577,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
       </div>
 
       {needs.noColor.needed > 0 && (
-        <div className="card" style={{ borderColor: 'var(--gold)' }}>
+        <div className="card inv-wide" style={{ borderColor: 'var(--gold)' }}>
           <div className="hint" style={{ marginTop: 0, color: 'var(--text)' }}>
             ⚠ <b>{fmtQty(needs.noColor.needed)} ft</b> of roofline is on jobs with no color picked. The line is counted, but its bulbs aren’t counted against any color yet. Tap a job to pick one:
           </div>
@@ -1256,7 +1686,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
             <CommitInput type="number" inputMode="numeric" min="0" step="1" value={item.qty} aria-label="Quantity"
               onCommit={text => validQty(text) ? updateItem(item.id, { qty: Number(text) }) : (alert('Enter a number of 0 or more.'), false)} />
             <CommitInput type="text" value={item.note || ''} placeholder="e.g. boxes of 100" aria-label="Note" onCommit={text => updateItem(item.id, { note: text.trim() })} />
-            <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${item.name || 'this item'}?`)) removeItem(item.id); }} aria-label="Remove item">✕</button>
+            <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${item.name || 'this item'}?`)) removeItem(item.id); }} aria-label="Remove item"><Icon name="close" /></button>
           </div>
         ))}
         <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => addItem('other')}>+ Add item</button>
@@ -1331,9 +1761,11 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
   );
 }
 
+const initialsOf = (name) => (name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
+
 function TechsTab({ techs, allTechs, jobs, settings, onAdd, onEdit, onDelete }) {
   return (
-    <div>
+    <div className="techs-layout">
       <div className="card">
         <div className="row" style={{ marginBottom: techs.length ? 8 : 0 }}>
           <div className="section-title" style={{ marginBottom: 0 }}>Tech Roster</div>
@@ -1346,13 +1778,16 @@ function TechsTab({ techs, allTechs, jobs, settings, onAdd, onEdit, onDelete }) 
           </div>
         ) : techs.map(t => (
           <div className="tech-row" key={t.id}>
-            <div>
-              <div className="tech-name">{t.name}</div>
-              <div className="tech-meta">Paid by commission</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+              <span className="avatar">{initialsOf(t.name)}</span>
+              <div style={{ minWidth: 0 }}>
+                <div className="tech-name">{t.name}</div>
+                <div className="tech-meta">Paid by commission</div>
+              </div>
             </div>
-            <div>
-              <button className="icon-btn" onClick={() => onEdit(t)}>✏️</button>
-              <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${t.name}? They'll come off jobs that aren't completed yet. Completed jobs keep them, so past payouts don't change.`)) onDelete(t.id); }}>🗑️</button>
+            <div style={{ display: 'flex' }}>
+              <button className="icon-btn" onClick={() => onEdit(t)} aria-label={`Edit ${t.name}`}><Icon name="edit" /></button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${t.name}? They'll come off jobs that aren't completed yet. Completed jobs keep them, so past payouts don't change.`)) onDelete(t.id); }} aria-label={`Remove ${t.name}`}><Icon name="trash" /></button>
             </div>
           </div>
         ))}
@@ -1373,25 +1808,22 @@ function TechModal({ tech, onClose, onSave }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
-        <div className="modal-head">
-          <h2>{isNew ? 'Add Tech' : 'Edit Tech'}</h2>
-          <button className="close-x" onClick={onClose}>✕</button>
-        </div>
-
+    <Sheet title={isNew ? 'Add Tech' : 'Edit Tech'} onClose={onClose}
+      footer={(close) => (
+        <React.Fragment>
+          <button className="btn btn-ghost" onClick={close}>Cancel</button>
+          <button className="btn btn-primary" onClick={save}>Save Tech</button>
+        </React.Fragment>
+      )}>
+      <div className="form-section">
         <label>Tech Name</label>
-        <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mike Johnson" autoFocus />
+        <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mike Johnson" autoFocus
+          onKeyDown={e => { if (e.key === 'Enter') save(); }} />
         <div className="hint" style={{ marginTop: 10 }}>
           Techs earn a commission % of each job they work. You set each tech's % on the job; new jobs start with your default from Settings, split evenly.
         </div>
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" style={{ flex: 2 }} onClick={save}>Save Tech</button>
-        </div>
       </div>
-    </div>
+    </Sheet>
   );
 }
 
@@ -1420,10 +1852,13 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
   const [picking, setPicking] = useState(null); // { id, which } of the payment being recorded
   // Scheduled work reads best soonest-first; everything else newest/highest-first.
   const [sortKey, setSortKey] = useState('scheduled');
+  const [search, setSearch] = useState('');
 
   const visible = useMemo(() => {
     const test = (JOB_FILTERS.find(f => f.id === filter) || JOB_FILTERS[0]).test;
-    const withCalc = jobs.filter(test).map(j => ({ job: j, calc: computeJobFinancials(j, settings) }));
+    const q = search.trim().toLowerCase();
+    const matches = (j) => !q || (j.customer || '').toLowerCase().includes(q);
+    const withCalc = jobs.filter(j => test(j) && matches(j)).map(j => ({ job: j, calc: computeJobFinancials(j, settings) }));
     const cmp = {
       scheduled: (a, b) => scheduledOf(a.job).localeCompare(scheduledOf(b.job)),
       date: (a, b) => new Date(b.job.date) - new Date(a.job.date),
@@ -1433,7 +1868,7 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
       feet: (a, b) => (Number(b.job.feet) || 0) - (Number(a.job.feet) || 0),
     }[sortKey];
     return withCalc.sort(cmp);
-  }, [jobs, settings, sortKey, filter]);
+  }, [jobs, settings, sortKey, filter, search]);
 
   const owedTotal = useMemo(
     () => visible.reduce((s, { job }) => s + jobPayments(job).outstanding, 0),
@@ -1442,11 +1877,14 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
 
   return (
     <div>
-      <div className="row" style={{ marginBottom: 10 }}>
-        <div className="section-title" style={{ marginBottom: 0 }}>Jobs ({visible.length})</div>
-        <select className="sort-select" value={sortKey} onChange={e => setSortKey(e.target.value)}>
-          <option value="scheduled">Scheduled date</option>
-          <option value="date">Newest added</option>
+      <div className="toolbar">
+        <div className="search">
+          <Icon name="search" />
+          <input type="search" value={search} onChange={e => setSearch(e.target.value)} placeholder="Search jobs" aria-label="Search jobs by customer" />
+        </div>
+        <select className="sort-select" value={sortKey} onChange={e => setSortKey(e.target.value)} aria-label="Sort jobs">
+          <option value="scheduled">Soonest</option>
+          <option value="date">Newest</option>
           <option value="profit">Profit</option>
           <option value="margin">Margin %</option>
           <option value="revenue">Revenue</option>
@@ -1474,14 +1912,14 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
       {jobs.length === 0 ? (
         <div className="card"><div className="empty-state">
           <div className="big">🎅</div>
-          No jobs yet. Tap + to add your first install.
+          No jobs yet. Tap <b>New job</b> to add your first install.
         </div></div>
       ) : visible.length === 0 ? (
         <div className="card"><div className="empty-state">
           <div className="big">🔍</div>
-          No jobs match this filter.
+          {search.trim() ? `No jobs match “${search.trim()}”.` : 'No jobs match this filter.'}
         </div></div>
-      ) : visible.map(({ job, calc }) => {
+      ) : <div className="job-list">{visible.map(({ job, calc }) => {
         const pay = jobPayments(job);
         return (
           <div className="card job-card" key={job.id} onClick={() => onEdit(job)}>
@@ -1496,7 +1934,7 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span className={"badge " + (job.status === 'Completed' ? 'badge-done' : 'badge-sched')}>{job.status}</span>
-                <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete job for ${job.customer}?`)) onDelete(job.id); }}>🗑️</button>
+                <button className="icon-btn danger" aria-label={`Delete job for ${job.customer}`} onClick={(e) => { e.stopPropagation(); if (confirm(`Delete job for ${job.customer}?`)) onDelete(job.id); }}><Icon name="trash" /></button>
               </div>
             </div>
             <div className="job-metrics">
@@ -1532,7 +1970,7 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
             )}
           </div>
         );
-      })}
+      })}</div>}
     </div>
   );
 }
@@ -1713,15 +2151,16 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
-        <div className="modal-head">
-          <h2>{isNew ? 'New Job' : 'Edit Job'}</h2>
-          <button className="close-x" onClick={onClose}>✕</button>
-        </div>
-
+    <Sheet title={isNew ? 'New Job' : 'Edit Job'} onClose={onClose}
+      footer={(close) => (
+        <React.Fragment>
+          <button className="btn btn-ghost" onClick={close}>Cancel</button>
+          <button className="btn btn-primary" onClick={save}>Save Job</button>
+        </React.Fragment>
+      )}>
+        <div className="form-section">
         <label>Customer Name</label>
-        <input type="text" value={customer} onChange={e => setCustomer(e.target.value)} placeholder="e.g. Smith Residence" autoFocus />
+        <input type="text" value={customer} onChange={e => setCustomer(e.target.value)} placeholder="e.g. Smith Residence" autoFocus={isNew} />
 
         <label>Scheduled For</label>
         <input type="date" value={scheduledDate} onChange={e => setScheduledDate(e.target.value)} />
@@ -1736,7 +2175,9 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
             <input type="number" inputMode="decimal" min="0" step="1" value={revenue} onChange={e => setRevenue(e.target.value)} placeholder="0" />
           </div>
         </div>
+        </div>
 
+        <div className="form-section">
         <label>Roofline Color</label>
         <div className="color-grid">
           {Object.keys(ROOFLINE_PATTERNS).map(name => (
@@ -1760,8 +2201,10 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
           );
         })()}
         <div className="hint">⏲ Plus <b>1 timer</b>. Every job gets one, and it’s counted in Inventory.</div>
+        </div>
 
-        <label style={{ marginTop: 16 }}>Mini Lights</label>
+        <div className="form-section">
+        <label>Mini Lights</label>
         <div className="card" style={{ margin: 0, padding: 10 }}>
           {miniLights.length === 0 ? (
             <div className="hint" style={{ marginTop: 0 }}>No mini lights on this job yet.</div>
@@ -1776,7 +2219,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
                 onChange={e => updateMini(r.id, { est: e.target.value })} aria-label="Estimated balls" />
               <input type="number" inputMode="numeric" min="0" step="1" value={r.actual} placeholder="—"
                 onChange={e => updateMini(r.id, { actual: e.target.value })} aria-label="Actual balls used" />
-              <button className="icon-btn danger" onClick={() => removeMini(r.id)} aria-label="Remove this color">✕</button>
+              <button className="icon-btn danger" onClick={() => removeMini(r.id)} aria-label="Remove this color"><Icon name="close" /></button>
             </div>
           ))}
           <datalist id="mini-light-colors">{miniColorOptions.map(c => <option key={c} value={c} />)}</datalist>
@@ -1792,8 +2235,10 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
         {status === 'Completed' && calc.mini.usingEstimate && (
           <div className="hint" style={{ color: 'var(--loss)' }}>⚠ This job is completed — enter the actual mini lights used.</div>
         )}
+        </div>
 
-        <label style={{ marginTop: 16 }}>Mock-up Pictures{pics.length > 0 ? ` (${pics.length})` : ''}</label>
+        <div className="form-section">
+        <label>Mock-up Pictures{pics.length > 0 ? ` (${pics.length})` : ''}</label>
         {pics.length > 0 && (
           <div className="pic-grid">
             {pics.map((p, i) => (
@@ -1833,11 +2278,13 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
             <div className="lightbox-close">{viewable.length > 1 ? `${viewIndex + 1} of ${viewable.length} · ` : ''}Tap anywhere to close</div>
           </div>
         )}
+        </div>
 
+        <div className="form-section">
         <label>Status</label>
         <div className="pill-group">
           <div className={"pill" + (status === 'Scheduled' ? ' active' : '')} onClick={() => setStatus('Scheduled')}>Scheduled</div>
-          <div className={"pill active gold" + (status === 'Completed' ? ' active' : '')} style={status !== 'Completed' ? { background: 'var(--white)', color: 'var(--muted)', borderColor: 'var(--border)' } : {}} onClick={() => setStatus('Completed')}>Completed</div>
+          <div className={"pill gold" + (status === 'Completed' ? ' active' : '')} onClick={() => setStatus('Completed')}>Completed</div>
         </div>
 
         <label style={{ marginTop: 16 }}>Payment</label>
@@ -1855,8 +2302,10 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
             </div>
           );
         })}
+        </div>
 
-        <label style={{ marginTop: 16 }}>Techs Assigned</label>
+        <div className="form-section">
+        <label>Techs Assigned</label>
         <div className="card" style={{ margin: 0, padding: 10 }}>
           {pickableTechs.length === 0 ? (
             <div className="hint">No techs in your roster yet. Add techs from the Techs tab first.</div>
@@ -1893,11 +2342,14 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
             Split {pct2(calc.commissionPct || defaultPct)}% evenly
           </button>
         )}
+        </div>
 
+        <div className="form-section">
         <label>Misc / Materials Cost ($)</label>
         <input type="number" inputMode="decimal" min="0" step="0.01" value={miscCost} onChange={e => setMiscCost(e.target.value)} placeholder="0.00" />
         <label>Note (optional)</label>
         <input type="text" value={miscNote} onChange={e => setMiscNote(e.target.value)} placeholder="clips, timers, extension cords, gas..." />
+        </div>
 
         <div className="summary-box">
           <div className="row"><span className="lab">Commission ({pct2(calc.commissionPct)}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
@@ -1912,13 +2364,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
         <div className="hint" style={{ marginTop: 6 }}>
           Lights are only subtracted here and on the Jobs tab. The Dashboard leaves them out because they're logged as an expense, so it will count this job's profit as {fmtMoney2(calc.netProfit)}.
         </div>
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" style={{ flex: 2 }} onClick={save}>Save Job</button>
-        </div>
-      </div>
-    </div>
+    </Sheet>
   );
 }
 
@@ -1939,7 +2385,7 @@ function ExpensesTab({ expenses, onAdd, onEdit, onDelete }) {
           <div className="big">💸</div>
           No expenses logged yet. Track overhead like insurance, fuel, and advertising here so your dashboard reflects true profit.
         </div></div>
-      ) : sorted.map(ex => (
+      ) : <div className="expense-list">{sorted.map(ex => (
         <div className="card job-card" key={ex.id} onClick={() => onEdit(ex)}>
           <div className="job-top">
             <div>
@@ -1947,12 +2393,12 @@ function ExpensesTab({ expenses, onAdd, onEdit, onDelete }) {
               <div className="job-sub">{fmtDateOnly(ex.date)} · {ex.category}</div>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <div style={{ fontWeight: 800 }}>{fmtMoney2(ex.amount)}</div>
-              <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete this expense?`)) onDelete(ex.id); }}>🗑️</button>
+              <div style={{ fontWeight: 800, fontSize: 16, fontVariantNumeric: 'tabular-nums' }}>{fmtMoney2(ex.amount)}</div>
+              <button className="icon-btn danger" onClick={(e) => { e.stopPropagation(); if (confirm(`Delete this expense?`)) onDelete(ex.id); }} aria-label="Delete expense"><Icon name="trash" /></button>
             </div>
           </div>
         </div>
-      ))}
+      ))}</div>}
     </div>
   );
 }
@@ -1971,15 +2417,16 @@ function ExpenseModal({ expense, onClose, onSave }) {
   };
 
   return (
-    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal">
-        <div className="modal-head">
-          <h2>{isNew ? 'Add Expense' : 'Edit Expense'}</h2>
-          <button className="close-x" onClick={onClose}>✕</button>
-        </div>
-
-        <label>Date</label>
-        <input type="date" value={date} onChange={e => setDate(e.target.value)} autoFocus />
+    <Sheet title={isNew ? 'Add Expense' : 'Edit Expense'} onClose={onClose}
+      footer={(close) => (
+        <React.Fragment>
+          <button className="btn btn-ghost" onClick={close}>Cancel</button>
+          <button className="btn btn-primary" onClick={save}>Save Expense</button>
+        </React.Fragment>
+      )}>
+      <div className="form-section">
+        <label>Amount ($)</label>
+        <input type="number" inputMode="decimal" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" autoFocus={isNew} />
 
         <label>Category</label>
         <select value={category} onChange={e => setCategory(e.target.value)}>
@@ -1989,15 +2436,10 @@ function ExpenseModal({ expense, onClose, onSave }) {
         <label>Description (optional)</label>
         <input type="text" value={description} onChange={e => setDescription(e.target.value)} placeholder="e.g. Truck insurance premium" />
 
-        <label>Amount ($)</label>
-        <input type="number" inputMode="decimal" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
-
-        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
-          <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" style={{ flex: 2 }} onClick={save}>Save Expense</button>
-        </div>
+        <label>Date</label>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} />
       </div>
-    </div>
+    </Sheet>
   );
 }
 
@@ -2070,9 +2512,24 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
     }).filter(pt => !pt.tech.removed || pt.jobCount > 0);
   }, [techs, calcs]);
 
+  const themeVersion = useThemeVersion();
   useEffect(() => {
     if (!window.Chart) return;
     const chronological = [...calcs].sort((a, b) => new Date(a.job.date) - new Date(b.job.date));
+    // Chart colors come from the theme, so the charts match light and dark mode.
+    const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const alpha = (hex, a) => {
+      const h = hex.replace('#', '');
+      const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+      return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+    };
+    const profit = css('--profit'), loss = css('--loss'), gold = css('--gold');
+    Chart.defaults.color = css('--muted');
+    Chart.defaults.borderColor = alpha(css('--border-strong'), .5);
+    Chart.defaults.font.family = "'Plus Jakarta Sans', system-ui, sans-serif";
+    Chart.defaults.font.weight = 600;
+    const tooltip = { backgroundColor: '#13221a', padding: 10, cornerRadius: 10, titleFont: { weight: 700 }, bodyFont: { weight: 600 } };
+    const money = { ticks: { callback: v => '$' + Number(v).toLocaleString() }, grid: { drawTicks: false }, border: { display: false } };
 
     if (barChart.current) barChart.current.destroy();
     if (barRef.current) {
@@ -2083,13 +2540,14 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
           datasets: [{
             label: 'Profit',
             data: chronological.map(c => c.calc.netProfit),
-            backgroundColor: chronological.map(c => c.calc.netProfit >= 0 ? '#196b40' : '#b0242a'),
-            borderRadius: 4,
+            backgroundColor: chronological.map(c => c.calc.netProfit >= 0 ? profit : loss),
+            borderRadius: 8,
+            maxBarThickness: 44,
           }],
         },
         options: {
-          plugins: { legend: { display: false } },
-          scales: { y: { ticks: { callback: v => '$' + v } } },
+          plugins: { legend: { display: false }, tooltip },
+          scales: { y: money, x: { grid: { display: false }, border: { display: false } } },
         },
       });
     }
@@ -2101,24 +2559,23 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
         data: {
           labels: chronological.map(c => fmtDate(c.job.date)),
           datasets: [
-            { label: 'Revenue', data: chronological.map(c => Number(c.job.revenue) || 0), borderColor: '#d4a017', backgroundColor: 'rgba(212,160,23,.15)', tension: .3, fill: true },
-            { label: 'Cost', data: chronological.map(c => c.calc.totalCost), borderColor: '#b0242a', backgroundColor: 'rgba(176,36,42,.12)', tension: .3, fill: true },
+            { label: 'Revenue', data: chronological.map(c => Number(c.job.revenue) || 0), borderColor: gold, backgroundColor: alpha(gold, .16), tension: .35, fill: true, pointRadius: 4, pointBackgroundColor: gold, borderWidth: 2.5 },
+            { label: 'Cost', data: chronological.map(c => c.calc.totalCost), borderColor: loss, backgroundColor: alpha(loss, .12), tension: .35, fill: true, pointRadius: 4, pointBackgroundColor: loss, borderWidth: 2.5 },
           ],
         },
         options: {
-          plugins: { legend: { position: 'bottom' } },
-          scales: { y: { ticks: { callback: v => '$' + v } } },
+          plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } }, tooltip },
+          scales: { y: money, x: { grid: { display: false }, border: { display: false } } },
         },
       });
     }
     return () => { if (barChart.current) barChart.current.destroy(); if (lineChart.current) lineChart.current.destroy(); };
-  }, [calcs]);
+  }, [calcs, themeVersion]);
 
   const sortArrow = (key) => sortKey === key ? (sortDir === 'asc' ? ' ▲' : ' ▼') : '';
 
   return (
     <div>
-      <div className="section-title">Overview</div>
       <div className="stat-grid" style={{ marginBottom: 14 }}>
         <div className="stat-card"><div className="lbl">Total Revenue</div><div className="val">{fmtMoney(totals.revenue)}</div></div>
         <div className="stat-card"><div className="lbl">Total Cost</div><div className="val">{fmtMoney(totals.cost)}</div></div>
@@ -2135,7 +2592,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
       <div className="summary-box" style={{ marginTop: 0, marginBottom: 14 }}>
         <div className="row"><span className="lab">Job profit (revenue − job costs)</span><span>{fmtMoney2(totals.profit)}</span></div>
         <div className="row"><span className="lab">Business expenses</span><span>−{fmtMoney2(totals.expensesTotal)}</span></div>
-        <div className="row total"><span className="lab">True Net Profit</span><span style={{ color: totals.trueProfit >= 0 ? '#8fe3ab' : '#ff9d9d' }}>{fmtMoney2(totals.trueProfit)}</span></div>
+        <div className="row total"><span className="lab">True Net Profit</span><span className={totals.trueProfit >= 0 ? 'good-on-dark' : 'bad-on-dark'}>{fmtMoney2(totals.trueProfit)}</span></div>
       </div>
 
       {calcs.length === 0 ? (
@@ -2145,7 +2602,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
             : 'No completed, fully paid jobs yet. Jobs show up here once they’re marked Completed and both the deposit and balance are recorded as paid.'}
         </div></div>
       ) : (
-        <React.Fragment>
+        <div className="dash-grid">
           <div className="card">
             <div className="section-title">Job Profitability</div>
             <div className="table-wrap">
@@ -2205,7 +2662,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
             <div className="section-title">Revenue vs Cost Over Time</div>
             <canvas ref={lineRef} height="180"></canvas>
           </div>
-        </React.Fragment>
+        </div>
       )}
     </div>
   );
@@ -2213,29 +2670,34 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 
 // ================= Settings =================
 function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, user, syncState, authError, signIn, signOut, onImport }) {
+  const [themePref, setThemePref] = useState(getThemePref());
   const [commStr, setCommStr] = useState(String(settings.commissionPct));
   const [feeStr, setFeeStr] = useState(String(settings.cardFeePct));
   const saveCardFee = () => {
     const v = Number(feeStr);
     if (feeStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a card fee between 0 and 100%.'); setFeeStr(String(settings.cardFeePct)); return; }
+    if (v !== Number(settings.cardFeePct)) toast('Card fee saved');
     setSettings(s => ({ ...s, cardFeePct: v }));
   };
   const [miniStr, setMiniStr] = useState(String(settings.miniLightCostPerBall));
   const saveMiniCost = () => {
     const v = Number(miniStr);
     if (miniStr === '' || isNaN(v) || v < 0) { alert('Enter a valid cost per ball of mini lights.'); setMiniStr(String(settings.miniLightCostPerBall)); return; }
+    if (v !== Number(settings.miniLightCostPerBall)) toast('Mini light cost saved');
     setSettings(s => ({ ...s, miniLightCostPerBall: v }));
   };
   const [spacingStr, setSpacingStr] = useState(String(spacingOf(settings)));
   const saveSpacing = () => {
     const v = Number(spacingStr);
     if (spacingStr === '' || isNaN(v) || v <= 0) { alert('Enter the bulb spacing in inches (more than 0).'); setSpacingStr(String(spacingOf(settings))); return; }
+    if (v !== Number(settings.bulbSpacingIn)) toast('Bulb spacing saved');
     setSettings(s => ({ ...s, bulbSpacingIn: v }));
   };
   const [lightStr, setLightStr] = useState(String(settings.lightCostPerFt));
   const saveLightCost = () => {
     const v = Number(lightStr);
     if (lightStr === '' || isNaN(v) || v < 0) { alert('Enter a valid light cost per foot.'); setLightStr(String(settings.lightCostPerFt)); return; }
+    if (v !== Number(settings.lightCostPerFt)) toast('Light cost saved');
     setSettings(s => ({ ...s, lightCostPerFt: v }));
   };
   const backups = lsGet(BACKUP_KEY, []).slice().reverse();
@@ -2243,6 +2705,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
   const saveCommission = () => {
     const v = Number(commStr);
     if (commStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a commission between 0 and 100%.'); setCommStr(String(settings.commissionPct)); return; }
+    if (v !== Number(settings.commissionPct)) toast('Commission saved');
     setSettings(s => ({ ...s, commissionPct: v }));
   };
 
@@ -2276,7 +2739,17 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
   };
 
   return (
-    <div>
+    <div className="settings-grid">
+      <div className="card">
+        <div className="section-title">Appearance</div>
+        <div className="pill-group">
+          {[['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']].map(([id, label]) => (
+            <div key={id} className={'pill' + (themePref === id ? ' active' : '')} onClick={() => { applyTheme(id); setThemePref(id); }}>{label}</div>
+          ))}
+        </div>
+        <div className="hint">Automatic follows your phone or computer’s light/dark setting. Saved on this device only.</div>
+      </div>
+
       <div className="card">
         <div className="section-title">Google Sync</div>
         {user ? (
@@ -2377,8 +2850,8 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
               <div className="tech-meta">Paid by commission</div>
             </div>
             <div>
-              <button className="icon-btn" onClick={() => onEditTech(t)}>✏️</button>
-              <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${t.name}? They'll come off jobs that aren't completed yet. Completed jobs keep them, so past payouts don't change.`)) onDeleteTech(t.id); }}>🗑️</button>
+              <button className="icon-btn" onClick={() => onEditTech(t)} aria-label={`Edit ${t.name}`}><Icon name="edit" /></button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Remove ${t.name}? They'll come off jobs that aren't completed yet. Completed jobs keep them, so past payouts don't change.`)) onDeleteTech(t.id); }} aria-label={`Remove ${t.name}`}><Icon name="trash" /></button>
             </div>
           </div>
         ))}
@@ -2393,8 +2866,8 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
               <div className="tech-meta">{fmtDate(j.date)} · {j.status}</div>
             </div>
             <div>
-              <button className="icon-btn" onClick={() => onEditJob(j)}>✏️</button>
-              <button className="icon-btn danger" onClick={() => { if (confirm(`Delete job for ${j.customer}?`)) onDeleteJob(j.id); }}>🗑️</button>
+              <button className="icon-btn" onClick={() => onEditJob(j)} aria-label={`Edit ${j.customer}`}><Icon name="edit" /></button>
+              <button className="icon-btn danger" onClick={() => { if (confirm(`Delete job for ${j.customer}?`)) onDeleteJob(j.id); }} aria-label={`Delete ${j.customer}`}><Icon name="trash" /></button>
             </div>
           </div>
         ))}
@@ -2409,8 +2882,8 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
               <div className="tech-meta">{fmtDateOnly(ex.date)} · {ex.category} · {fmtMoney2(ex.amount)}</div>
             </div>
             <div>
-              <button className="icon-btn" onClick={() => onEditExpense(ex)}>✏️</button>
-              <button className="icon-btn danger" onClick={() => { if (confirm('Delete this expense?')) onDeleteExpense(ex.id); }}>🗑️</button>
+              <button className="icon-btn" onClick={() => onEditExpense(ex)} aria-label="Edit expense"><Icon name="edit" /></button>
+              <button className="icon-btn danger" onClick={() => { if (confirm('Delete this expense?')) onDeleteExpense(ex.id); }} aria-label="Delete expense"><Icon name="trash" /></button>
             </div>
           </div>
         ))}
