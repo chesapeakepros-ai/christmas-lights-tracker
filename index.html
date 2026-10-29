@@ -304,7 +304,8 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // Lights are logged once as a business expense, so the light cost per foot only shows on the
 // Jobs tab ("with lights" figures). It never reaches the Dashboard, which would count it twice.
-const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15 };
+// inventoryAsOf: the date the stock was counted (the user's first count was 2026-10-28).
+const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15, inventoryAsOf: '2026-10-28' };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -634,17 +635,10 @@ const ROOFLINE_PATTERN_HINTS = {
 // (A first version stocked roofline as feet per color, kind 'roofline'; migrate() converts it.)
 const sameName = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
 
-// The install season runs July 1 to June 30. Only jobs scheduled this season use up stock;
-// earlier seasons' jobs drop off on their own.
-function currentSeason(today = todayYMD()) {
-  const [y, m] = today.split('-').map(Number);
-  const start = m >= 7 ? y : y - 1;
-  return { start: `${start}-07-01`, end: `${start + 1}-06-30`, label: `Jul 1, ${start} – Jun 30, ${start + 1}` };
-}
-
-// What this season's jobs need. Completed jobs count too: their lights are still up on the
-// house until takedown. Mini lights count the actual balls used, else the estimate.
-function inventoryNeeds(jobs, season, settings) {
+// What jobs need from the stock counted on `asOf`: every job scheduled on or after that date,
+// done or not, since its lights come out of that stock and stay on the house. Jobs before it
+// were already up when the stock was counted. Mini lights count the actual balls used, else the estimate.
+function inventoryNeeds(jobs, asOf, settings) {
   const line = { needed: 0, uses: [] };   // feet of line, every job with roofline
   const timers = { needed: 0, uses: [] }; // one timer goes with every job
   const bulbs = {};      // base color -> { needed, uses: [{ job, amount }] }
@@ -657,7 +651,7 @@ function inventoryNeeds(jobs, season, settings) {
   };
   jobs.forEach(job => {
     const day = scheduledOf(job);
-    if (!day || day < season.start || day > season.end) return;
+    if (!day || day < asOf) return;
     add(timers, job, 1);
     const feet = Number(job.feet) || 0;
     if (feet > 0) {
@@ -970,7 +964,7 @@ function App() {
             onDelete={deleteJob} onSetPayment={setPayment} />
         )}
         {tab === 'inventory' && (
-          <InventoryTab jobs={jobs} inventory={inventory} setInventory={setInventory} settings={settings} onEditJob={(j) => setJobModal(j)} />
+          <InventoryTab jobs={jobs} inventory={inventory} setInventory={setInventory} settings={settings} setSettings={setSettings} onEditJob={(j) => setJobModal(j)} />
         )}
         {tab === 'techs' && (
           <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings}
@@ -1068,9 +1062,9 @@ function CommitInput({ value, onCommit, ...props }) {
 const validQty = (text) => text.trim() !== '' && !isNaN(Number(text)) && Number(text) >= 0;
 const fmtQty = (n) => Math.round(n).toLocaleString();
 
-function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
-  const season = currentSeason();
-  const needs = useMemo(() => inventoryNeeds(jobs, season, settings), [jobs, season.start, settings.bulbSpacingIn]);
+function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, onEditJob }) {
+  const asOf = settings.inventoryAsOf || DEFAULT_SETTINGS.inventoryAsOf;
+  const needs = useMemo(() => inventoryNeeds(jobs, asOf, settings), [jobs, asOf, settings.bulbSpacingIn]);
   const spacing = spacingOf(settings);
   const [open, setOpen] = useState(null); // "kind:color" row showing its jobs
 
@@ -1118,7 +1112,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
 
   const usesList = (row, unit) => open === row.key && (
     <div className="inv-uses">
-      {row.uses.length === 0 ? <div>No jobs this season use this.</div> : row.uses.map(({ job, amount }) => (
+      {row.uses.length === 0 ? <div>No jobs since your stock count use this.</div> : row.uses.map(({ job, amount }) => (
         <div key={job.id} className="inv-use" onClick={() => onEditJob(job)}>
           <span><b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))} · {job.status}</span>
           <span>{fmtQty(amount)} {unit}</span>
@@ -1136,14 +1130,20 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
       <div className="card" style={shortages.length ? { borderColor: 'var(--loss)' } : {}}>
         <div className="section-title">{shortages.length ? 'Need to Order' : 'Stock Check'}</div>
         {shortages.length === 0 ? (
-          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers and mini lights for every job booked this season.</div>
+          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers and mini lights for every job since your stock count.</div>
         ) : shortages.map(s => (
           <div className="payout-row" key={s.what + s.name}>
             <span><b>{s.name}</b> <span className="tech-meta">{s.what}</span></span>
             <span style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtQty(s.amount)} {s.unit}</span>
           </div>
         ))}
-        <div className="hint">Counting jobs scheduled {season.label}, completed ones included, since their lights are still up until takedown.</div>
+        <label style={{ marginTop: 12 }}>Stock counted on</label>
+        <input type="date" value={asOf} style={{ maxWidth: 200 }} aria-label="Date the stock was counted"
+          onChange={e => { if (e.target.value) setSettings(s => ({ ...s, inventoryAsOf: e.target.value })); }} />
+        <div className="hint">
+          Counting jobs scheduled on or after {fmtDateOnly(asOf)}, done or not, since their lights come out of this stock.
+          Jobs before then were already up when you counted. When you recount (like next season), change this date.
+        </div>
       </div>
 
       {needs.noColor.needed > 0 && (
@@ -1204,7 +1204,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
           {leftCell(timerRow)}
         </div>
         {usesList(timerRow, 'timer')}
-        <div className="hint">Every job gets one timer, so this counts one for each job booked this season.</div>
+        <div className="hint">Every job gets one timer, so this counts one for each job since your stock count.</div>
       </div>
 
       <div className="card">
