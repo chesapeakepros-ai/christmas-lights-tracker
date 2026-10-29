@@ -345,8 +345,14 @@ function migrate(data) {
     return { ...rest, mockupIds: j.mockupIds || [mockupId] };
   });
   // Roofline used to be stocked as feet per color; it's now bulbs per color at the line spacing.
-  const inventory = (Array.isArray(data.inventory) ? data.inventory : []).map(i => i.kind !== 'roofline' ? i
+  let inventory = (Array.isArray(data.inventory) ? data.inventory : []).map(i => i.kind !== 'roofline' ? i
     : { ...i, kind: 'bulb', qty: socketsFor(Number(i.qty) || 0, settings) });
+  // Timers got their own row (one per job). If they were typed into Other Supplies before
+  // that, move that count over rather than tracking timers twice.
+  if (!inventory.some(i => i.kind === 'timer')) {
+    const typed = inventory.find(i => i.kind === 'other' && /^\s*timers?\s*$/i.test(i.name || ''));
+    if (typed) inventory = inventory.map(i => i === typed ? { id: i.id, kind: 'timer', name: 'Timers', qty: Number(i.qty) || 0 } : i);
+  }
   return { ...data, techs, jobs, settings, inventory };
 }
 
@@ -624,7 +630,7 @@ const ROOFLINE_PATTERN_HINTS = {
   'Classic Christmas': 'red, green & pure white',
   'Multicolor': 'multicolor',
 };
-// Inventory items: { id, kind: 'line' | 'bulb' | 'mini' | 'other', name, qty, note }.
+// Inventory items: { id, kind: 'line' | 'bulb' | 'timer' | 'mini' | 'other', name, qty, note }.
 // (A first version stocked roofline as feet per color, kind 'roofline'; migrate() converts it.)
 const sameName = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
 
@@ -640,6 +646,7 @@ function currentSeason(today = todayYMD()) {
 // house until takedown. Mini lights count the actual balls used, else the estimate.
 function inventoryNeeds(jobs, season, settings) {
   const line = { needed: 0, uses: [] };   // feet of line, every job with roofline
+  const timers = { needed: 0, uses: [] }; // one timer goes with every job
   const bulbs = {};      // base color -> { needed, uses: [{ job, amount }] }
   const mini = {};       // lowercased color -> { color, needed, uses }
   const noColor = { needed: 0, uses: [] };  // feet whose bulb colors aren't picked yet
@@ -651,6 +658,7 @@ function inventoryNeeds(jobs, season, settings) {
   jobs.forEach(job => {
     const day = scheduledOf(job);
     if (!day || day < season.start || day > season.end) return;
+    add(timers, job, 1);
     const feet = Number(job.feet) || 0;
     if (feet > 0) {
       add(line, job, feet);
@@ -668,7 +676,7 @@ function inventoryNeeds(jobs, season, settings) {
       add(mini[key] || (mini[key] = { color, needed: 0, uses: [] }), job, balls);
     });
   });
-  return { line, bulbs, mini, noColor };
+  return { line, bulbs, timers, mini, noColor };
 }
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
@@ -1080,6 +1088,8 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
 
   // Need rounds up: a job can't use a fraction of a foot of line.
   const need = (bucket) => bucket ? Math.ceil(bucket.needed - 1e-6) : 0;
+  const timerItem = itemsOf('timer')[0];
+  const timerRow = { key: 'timer', kind: 'timer', name: 'Timers', have: timerItem ? Number(timerItem.qty) || 0 : 0, need: need(needs.timers), uses: needs.timers.uses };
   const lineItem = itemsOf('line')[0];
   const lineRow = { key: 'line', kind: 'line', name: 'Line', have: lineItem ? Number(lineItem.qty) || 0 : 0, need: need(needs.line), uses: needs.line.uses };
   const bulbRows = ROOFLINE_BASE_COLORS.map(color => {
@@ -1102,6 +1112,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
   const shortages = [
     ...(lineRow.need > lineRow.have ? [{ name: `${spacing}″ line`, amount: lineRow.need - lineRow.have, unit: 'ft', what: 'roofline' }] : []),
     ...bulbRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'bulbs', what: 'roofline bulbs' })),
+    ...(timerRow.need > timerRow.have ? [{ name: 'Timers', amount: timerRow.need - timerRow.have, unit: '', what: 'one per job' }] : []),
     ...miniRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'balls', what: 'mini lights' })),
   ];
 
@@ -1125,7 +1136,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
       <div className="card" style={shortages.length ? { borderColor: 'var(--loss)' } : {}}>
         <div className="section-title">{shortages.length ? 'Need to Order' : 'Stock Check'}</div>
         {shortages.length === 0 ? (
-          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough roofline and mini lights for every job booked this season.</div>
+          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers and mini lights for every job booked this season.</div>
         ) : shortages.map(s => (
           <div className="payout-row" key={s.what + s.name}>
             <span><b>{s.name}</b> <span className="tech-meta">{s.what}</span></span>
@@ -1180,6 +1191,20 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
           Your line has a bulb every {spacing}″, so each foot takes {pct2(12 / spacing)} bulbs ({fmtQty(socketsFor(100, settings))} bulbs per 100 ft).
           Candy Cane alternates Red and Pure White; Classic Christmas repeats Red, Green, Pure White. Tap a color to see the jobs using it.
         </div>
+      </div>
+
+      <div className="card">
+        <div className="section-title">Timers</div>
+        <div className="inv-grid inv-head"><span></span><span>Have</span><span>On jobs</span><span>Left</span></div>
+        <div className="inv-grid">
+          <span className="inv-name" onClick={() => setOpen(open === 'timer' ? null : 'timer')}>Timers <span className="tech-meta">{open === 'timer' ? '▾' : '▸'}</span></span>
+          <CommitInput type="number" inputMode="numeric" min="0" step="1" value={timerRow.have} aria-label="Timers on hand"
+            onCommit={text => setQty('timer', 'Timers', text)} />
+          <span className="inv-num">{fmtQty(timerRow.need)}</span>
+          {leftCell(timerRow)}
+        </div>
+        {usesList(timerRow, 'timer')}
+        <div className="hint">Every job gets one timer, so this counts one for each job booked this season.</div>
       </div>
 
       <div className="card">
@@ -1734,6 +1759,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
             </div>
           );
         })()}
+        <div className="hint">⏲ Plus <b>1 timer</b>. Every job gets one, and it’s counted in Inventory.</div>
 
         <label style={{ marginTop: 16 }}>Mini Lights</label>
         <div className="card" style={{ margin: 0, padding: 10 }}>
