@@ -501,6 +501,8 @@
   .inv-uses { background: var(--surface-2); border-radius: 12px; padding: 4px 12px; margin: 6px 0 8px; font-size: 12.5px; color: var(--muted); animation: pageIn .25s var(--ease) both; }
   .inv-use { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--border); cursor: pointer; font-size: 12.5px; }
   .inv-use:last-child { border-bottom: none; }
+  .inv-use > span:last-child { white-space: nowrap; }
+  .inv-use-head { padding: 9px 0 3px; font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
   .inv-use b { color: var(--text); }
 
   .btn-google {
@@ -588,7 +590,7 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 
 // Lights are logged once as a business expense, so the light cost per foot only shows on the
 // Jobs tab ("with lights" figures). It never reaches the Dashboard, which would count it twice.
-// inventoryAsOf: the date the stock was counted (the user's first count was 2026-10-28).
+// inventoryAsOf: the count date for stock entered before counts were time-stamped (the user's first count was 2026-10-28).
 const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15, inventoryAsOf: '2026-10-28' };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
@@ -915,14 +917,34 @@ const ROOFLINE_PATTERN_HINTS = {
   'Classic Christmas': 'red, green & pure white',
   'Multicolor': 'multicolor',
 };
-// Inventory items: { id, kind: 'line' | 'bulb' | 'timer' | 'mini' | 'other', name, qty, note }.
+// Inventory items: { id, kind: 'line' | 'bulb' | 'timer' | 'mini' | 'other', name, qty, note, countedAt }.
+// qty is the shelf count as of countedAt (when it was typed in).
 // (A first version stocked roofline as feet per color, kind 'roofline'; migrate() converts it.)
 const sameName = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
 
-// What jobs need from the stock counted on `asOf`: every job scheduled on or after that date,
-// done or not, since its lights come out of that stock and stay on the house. Jobs before it
-// were already up when the stock was counted. Mini lights count the actual balls used, else the estimate.
-function inventoryNeeds(jobs, asOf, settings) {
+// What one job takes from stock: its feet of line, one bulb per socket dealt out across its color
+// pattern, one timer, and its mini light balls by color (the actual count once entered, else the estimate).
+function jobStockUse(job, settings) {
+  const feet = Math.max(0, Number(job.feet) || 0);
+  const pattern = ROOFLINE_PATTERNS[job.rooflineColor];
+  const bulbs = {};
+  if (feet > 0 && pattern) bulbsByColor(pattern, socketsFor(feet, settings)).forEach(([color, count]) => {
+    if (count) bulbs[color] = (bulbs[color] || 0) + count;
+  });
+  const mini = {};
+  (job.miniLights || []).forEach(r => {
+    const balls = blankNum(r.actual) ? (Number(r.est) || 0) : (Number(r.actual) || 0);
+    if (!balls) return;
+    const color = (r.color || '').trim() || 'No color picked';
+    const key = color.toLowerCase();
+    (mini[key] || (mini[key] = { color, balls: 0 })).balls += balls;
+  });
+  return { line: feet, noColor: pattern ? 0 : feet, timers: 1, bulbs, mini };
+}
+
+// Inventory counts are what's on the shelf. Jobs that aren't completed yet still need their
+// lights; this totals that. Completed jobs already took theirs (see takenSince).
+function inventoryNeeds(jobs, settings) {
   const line = { needed: 0, uses: [] };   // feet of line, every job with roofline
   const timers = { needed: 0, uses: [] }; // one timer goes with every job
   const bulbs = {};      // base color -> { needed, uses: [{ job, amount }] }
@@ -934,27 +956,40 @@ function inventoryNeeds(jobs, asOf, settings) {
     if (same) same.amount += amount; else bucket.uses.push({ job, amount });
   };
   jobs.forEach(job => {
-    const day = scheduledOf(job);
-    if (!day || day < asOf) return;
-    add(timers, job, 1);
-    const feet = Number(job.feet) || 0;
-    if (feet > 0) {
-      add(line, job, feet);
-      const pattern = ROOFLINE_PATTERNS[job.rooflineColor];
-      if (!pattern) add(noColor, job, feet);
-      else bulbsByColor(pattern, socketsFor(feet, settings)).forEach(([color, count]) => {
-        if (count) add(bulbs[color] || (bulbs[color] = { needed: 0, uses: [] }), job, count);
-      });
-    }
-    (job.miniLights || []).forEach(r => {
-      const balls = blankNum(r.actual) ? (Number(r.est) || 0) : (Number(r.actual) || 0);
-      if (!balls) return;
-      const color = (r.color || '').trim() || 'No color picked';
-      const key = color.toLowerCase();
-      add(mini[key] || (mini[key] = { color, needed: 0, uses: [] }), job, balls);
-    });
+    if (job.status === 'Completed') return;
+    const use = jobStockUse(job, settings);
+    add(timers, job, use.timers);
+    if (use.line) add(line, job, use.line);
+    if (use.noColor) add(noColor, job, use.noColor);
+    Object.entries(use.bulbs).forEach(([color, count]) => add(bulbs[color] || (bulbs[color] = { needed: 0, uses: [] }), job, count));
+    Object.entries(use.mini).forEach(([key, m]) => add(mini[key] || (mini[key] = { color: m.color, needed: 0, uses: [] }), job, m.balls));
   });
   return { line, bulbs, timers, mini, noColor };
+}
+
+// When an item was last counted: the moment a count was typed in (a timestamp), or for counts
+// entered before that was tracked, the old "stock counted on" day (the user's first count was 2026-10-28).
+const countedAtOf = (item, settings) => (item && item.countedAt) || settings.inventoryAsOf || DEFAULT_SETTINGS.inventoryAsOf;
+const countDayOf = (countedAt) => countedAt.length > 10 ? ymdOf(new Date(countedAt)) : countedAt;
+// Did a completed job take its lights after the count? Judged by its install (scheduled) day, so
+// marking it Completed late doesn't take it off the shelf twice. On the day of the count itself
+// it did, unless the job was already marked Completed when the count was entered.
+function takenAfterCount(job, countedAt) {
+  const day = scheduledOf(job);
+  const countDay = countDayOf(countedAt);
+  if (!day || day < countDay) return false;
+  if (day > countDay) return true;
+  return !(job.completedAt && job.completedAt <= countedAt);
+}
+// How much of one stock item completed jobs took since it was counted. `pick` reads the amount from jobStockUse.
+function takenSince(jobs, countedAt, pick, settings) {
+  const out = { amount: 0, uses: [] };
+  jobs.forEach(job => {
+    if (job.status !== 'Completed' || !takenAfterCount(job, countedAt)) return;
+    const amount = pick(jobStockUse(job, settings)) || 0;
+    if (amount > 0) { out.amount += amount; out.uses.push({ job, amount }); }
+  });
+  return out;
 }
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
@@ -1509,47 +1544,51 @@ function CommitInput({ value, onCommit, ...props }) {
 const validQty = (text) => text.trim() !== '' && !isNaN(Number(text)) && Number(text) >= 0;
 const fmtQty = (n) => Math.round(n).toLocaleString();
 
-function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, onEditJob }) {
-  const asOf = settings.inventoryAsOf || DEFAULT_SETTINGS.inventoryAsOf;
-  const needs = useMemo(() => inventoryNeeds(jobs, asOf, settings), [jobs, asOf, settings.bulbSpacingIn]);
+function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
+  const needs = useMemo(() => inventoryNeeds(jobs, settings), [jobs, settings.bulbSpacingIn]);
   const spacing = spacingOf(settings);
   const [open, setOpen] = useState(null); // "kind:color" row showing its jobs
 
+  // Typing a number is a fresh shelf count, saved as of right now.
   const itemsOf = (kind) => inventory.filter(i => i.kind === kind);
   const setQty = (kind, name, text) => {
     if (!validQty(text)) { alert('Enter a number of 0 or more.'); return false; }
     const qty = Number(text);
+    const countedAt = new Date().toISOString();
     setInventory(prev => prev.some(i => i.kind === kind && sameName(i.name, name))
-      ? prev.map(i => i.kind === kind && sameName(i.name, name) ? { ...i, qty } : i)
-      : [...prev, { id: uid(), kind, name, qty }]);
-    toast('Stock updated');
+      ? prev.map(i => i.kind === kind && sameName(i.name, name) ? { ...i, qty, countedAt } : i)
+      : [...prev, { id: uid(), kind, name, qty, countedAt }]);
+    toast('Count saved');
   };
   const updateItem = (id, patch) => { setInventory(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i)); toast('Stock updated'); };
   const removeItem = (id) => { setInventory(prev => prev.filter(i => i.id !== id)); toast('Removed from inventory'); };
-  const addItem = (kind) => setInventory(prev => [...prev, { id: uid(), kind, name: '', qty: 0 }]);
+  const addItem = (kind) => setInventory(prev => [...prev, { id: uid(), kind, name: '', qty: 0, countedAt: new Date().toISOString() }]);
 
   // Need rounds up: a job can't use a fraction of a foot of line.
-  const need = (bucket) => bucket ? Math.ceil(bucket.needed - 1e-6) : 0;
-  const timerItem = itemsOf('timer')[0];
-  const timerRow = { key: 'timer', kind: 'timer', name: 'Timers', have: timerItem ? Number(timerItem.qty) || 0 : 0, need: need(needs.timers), uses: needs.timers.uses };
-  const lineItem = itemsOf('line')[0];
-  const lineRow = { key: 'line', kind: 'line', name: 'Line', have: lineItem ? Number(lineItem.qty) || 0 : 0, need: need(needs.line), uses: needs.line.uses };
-  const bulbRows = ROOFLINE_BASE_COLORS.map(color => {
-    const item = itemsOf('bulb').find(i => sameName(i.name, color));
-    const bucket = needs.bulbs[color];
-    return { key: 'bulb:' + color, kind: 'bulb', name: color, have: item ? Number(item.qty) || 0 : 0, need: need(bucket), uses: bucket ? bucket.uses : [] };
-  });
+  const need = (bucket) => bucket ? Math.max(0, Math.ceil(bucket.needed - 1e-6)) : 0;
+  // On shelf = the last count, minus what jobs completed since then took.
+  const makeRow = (key, kind, name, item, bucket, pick) => {
+    const countedAt = countedAtOf(item, settings);
+    const taken = takenSince(jobs, countedAt, pick, settings);
+    const counted = item ? Number(item.qty) || 0 : 0;
+    return { key, kind, name, item, countedAt, taken, have: Math.max(0, counted - Math.ceil(taken.amount - 1e-6)), need: need(bucket), uses: bucket ? bucket.uses : [] };
+  };
+  const timerRow = makeRow('timer', 'timer', 'Timers', itemsOf('timer')[0], needs.timers, u => u.timers);
+  const lineRow = makeRow('line', 'line', 'Line', itemsOf('line')[0], needs.line, u => u.line);
+  const bulbRows = ROOFLINE_BASE_COLORS.map(color =>
+    makeRow('bulb:' + color, 'bulb', color, itemsOf('bulb').find(i => sameName(i.name, color)), needs.bulbs[color], u => u.bulbs[color]));
   const miniItems = itemsOf('mini');
+  const miniPick = (color) => { const key = (color || '').trim().toLowerCase(); return u => key && u.mini[key] ? u.mini[key].balls : 0; };
   const miniRows = [
     ...miniItems.map(item => {
       const bucket = item.name.trim() ? needs.mini[item.name.trim().toLowerCase()] : null;
-      return { key: 'mini:' + item.id, kind: 'mini', item, name: item.name, have: Number(item.qty) || 0, need: need(bucket), uses: bucket ? bucket.uses : [] };
+      return makeRow('mini:' + item.id, 'mini', item.name, item, bucket, miniPick(item.name));
     }),
     // Colors on jobs that aren't in the inventory yet.
     ...Object.values(needs.mini)
       .filter(b => !miniItems.some(i => sameName(i.name, b.color)))
       .sort((a, b) => a.color.localeCompare(b.color))
-      .map(b => ({ key: 'mini:job:' + b.color.toLowerCase(), kind: 'mini', item: null, name: b.color, have: 0, need: need(b), uses: b.uses })),
+      .map(b => makeRow('mini:job:' + b.color.toLowerCase(), 'mini', b.color, null, b, miniPick(b.color))),
   ];
   const shortages = [
     ...(lineRow.need > lineRow.have ? [{ name: `${spacing}″ line`, amount: lineRow.need - lineRow.have, unit: 'ft', what: 'roofline' }] : []),
@@ -1558,12 +1597,23 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
     ...miniRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'balls', what: 'mini lights' })),
   ];
 
+  const fmtCounted = (countedAt) => countedAt.length > 10
+    ? new Date(countedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+    : fmtDateOnly(countedAt);
   const usesList = (row, unit) => open === row.key && (
     <div className="inv-uses">
-      {row.uses.length === 0 ? <div>No jobs since your stock count use this.</div> : row.uses.map(({ job, amount }) => (
+      <div className="inv-use-head">Still needed</div>
+      {row.uses.length === 0 ? <div className="inv-use">No jobs that aren’t done yet need this.</div> : row.uses.map(({ job, amount }) => (
         <div key={job.id} className="inv-use" onClick={() => onEditJob(job)}>
           <span><b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))} · {job.status}</span>
           <span>{fmtQty(amount)} {unit}</span>
+        </div>
+      ))}
+      <div className="inv-use-head">Last counted {fmtCounted(row.countedAt)}{row.taken.uses.length ? ' · taken off since' : ''}</div>
+      {row.taken.uses.map(({ job, amount }) => (
+        <div key={job.id} className="inv-use" onClick={() => onEditJob(job)}>
+          <span><b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))} · Completed</span>
+          <span>−{fmtQty(amount)} {unit}</span>
         </div>
       ))}
     </div>
@@ -1578,26 +1628,24 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
       <div className="card" style={shortages.length ? { borderColor: 'var(--loss)', boxShadow: '0 0 0 3px var(--loss-soft)' } : {}}>
         <div className="section-title">{shortages.length ? 'Need to Order' : 'Stock Check'}</div>
         {shortages.length === 0 ? (
-          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers and mini lights for every job since your stock count.</div>
+          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers and mini lights on the shelf for every job that isn’t done yet.</div>
         ) : shortages.map(s => (
           <div className="payout-row" key={s.what + s.name}>
             <span><b>{s.name}</b> <span className="tech-meta">{s.what}</span></span>
             <span style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtQty(s.amount)} {s.unit}</span>
           </div>
         ))}
-        <label style={{ marginTop: 12 }}>Stock counted on</label>
-        <input type="date" value={asOf} style={{ maxWidth: 200 }} aria-label="Date the stock was counted"
-          onChange={e => { if (e.target.value) setSettings(s => ({ ...s, inventoryAsOf: e.target.value })); }} />
-        <div className="hint">
-          Counting jobs scheduled on or after {fmtDateOnly(asOf)}, done or not, since their lights come out of this stock.
-          Jobs before then were already up when you counted. When you recount (like next season), change this date.
+        <div className="hint" style={{ marginTop: 12 }}>
+          <b>On shelf</b> is what’s in your shop now. Type the real number whenever you count. Marking a job <b>Completed</b> takes
+          its line, bulbs, mini lights and timer off the shelf. <b>Needed</b> is what the jobs that aren’t done yet will use.
+          Mark finished jobs Completed before you count.
         </div>
       </div>
 
       {needs.noColor.needed > 0 && (
         <div className="card inv-wide" style={{ borderColor: 'var(--gold)' }}>
           <div className="hint" style={{ marginTop: 0, color: 'var(--text)' }}>
-            ⚠ <b>{fmtQty(needs.noColor.needed)} ft</b> of roofline is on jobs with no color picked. The line is counted, but its bulbs aren’t counted against any color yet. Tap a job to pick one:
+            ⚠ <b>{fmtQty(needs.noColor.needed)} ft</b> of roofline is on jobs not done yet with no color picked. The line is counted, but its bulbs aren’t counted against any color yet. Tap a job to pick one:
           </div>
           {needs.noColor.uses.map(({ job, amount }) => (
             <div key={job.id} className="inv-use" onClick={() => onEditJob(job)}>
@@ -1609,7 +1657,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
 
       <div className="card">
         <div className="section-title">Roofline Line (feet)</div>
-        <div className="inv-grid inv-head"><span></span><span>Have</span><span>On jobs</span><span>Left</span></div>
+        <div className="inv-grid inv-head"><span></span><span>On shelf</span><span>Needed</span><span>Left</span></div>
         <div className="inv-grid">
           <span className="inv-name" onClick={() => setOpen(open === 'line' ? null : 'line')}>{spacing}″ spaced line <span className="tech-meta">{open === 'line' ? '▾' : '▸'}</span></span>
           <CommitInput type="number" inputMode="numeric" min="0" step="1" value={lineRow.have} aria-label="Feet of line on hand"
@@ -1622,7 +1670,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
 
       <div className="card">
         <div className="section-title">Roofline Bulbs</div>
-        <div className="inv-grid inv-head"><span>Color</span><span>Have</span><span>On jobs</span><span>Left</span></div>
+        <div className="inv-grid inv-head"><span>Color</span><span>On shelf</span><span>Needed</span><span>Left</span></div>
         {bulbRows.map(row => (
           <React.Fragment key={row.key}>
             <div className="inv-grid">
@@ -1643,7 +1691,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
 
       <div className="card">
         <div className="section-title">Timers</div>
-        <div className="inv-grid inv-head"><span></span><span>Have</span><span>On jobs</span><span>Left</span></div>
+        <div className="inv-grid inv-head"><span></span><span>On shelf</span><span>Needed</span><span>Left</span></div>
         <div className="inv-grid">
           <span className="inv-name" onClick={() => setOpen(open === 'timer' ? null : 'timer')}>Timers <span className="tech-meta">{open === 'timer' ? '▾' : '▸'}</span></span>
           <CommitInput type="number" inputMode="numeric" min="0" step="1" value={timerRow.have} aria-label="Timers on hand"
@@ -1652,7 +1700,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
           {leftCell(timerRow)}
         </div>
         {usesList(timerRow, 'timer')}
-        <div className="hint">Every job gets one timer, so this counts one for each job since your stock count.</div>
+        <div className="hint">Every job gets one timer.</div>
       </div>
 
       <div className="card">
@@ -1660,7 +1708,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         {miniRows.length === 0 ? (
           <div className="hint" style={{ marginTop: 0 }}>No mini lights yet. Add the colors you have in stock.</div>
         ) : (
-          <div className="inv-grid inv-head"><span>Color</span><span>Have</span><span>On jobs</span><span>Left</span></div>
+          <div className="inv-grid inv-head"><span>Color</span><span>On shelf</span><span>Needed</span><span>Left</span></div>
         )}
         {miniRows.map(row => (
           <React.Fragment key={row.key}>
@@ -1678,7 +1726,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
                 <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.name} <span className="tech-meta">{open === row.key ? '▾' : '▸'} on jobs, not in stock</span></span>
               )}
               <CommitInput type="number" inputMode="numeric" min="0" step="1" value={row.have} aria-label={`${row.name || 'Mini light'} balls on hand`}
-                onCommit={text => row.item ? (validQty(text) ? updateItem(row.item.id, { qty: Number(text) }) : (alert('Enter a number of 0 or more.'), false)) : setQty('mini', row.name, text)} />
+                onCommit={text => row.item ? (validQty(text) ? updateItem(row.item.id, { qty: Number(text), countedAt: new Date().toISOString() }) : (alert('Enter a number of 0 or more.'), false)) : setQty('mini', row.name, text)} />
               <span className="inv-num">{fmtQty(row.need)}</span>
               {leftCell(row)}
             </div>
@@ -2144,6 +2192,9 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
     if (tip !== '' && (isNaN(Number(tip)) || Number(tip) < 0)) { alert('Enter a valid tip amount, or leave it blank.'); return; }
 
     const jobId = job.id || uid();
+    // When it was marked Completed (Inventory uses this to know if a count already reflects it).
+    // A job that was already Completed keeps its original time; switching back clears it.
+    const completedAt = status !== 'Completed' ? null : job.status === 'Completed' ? job.completedAt : new Date().toISOString();
     // Keep the pictures in the order shown. Ones not on this device yet are kept, not dropped.
     const mockupIds = [];
     let storeFailed = 0;
@@ -2172,6 +2223,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
       ...(rooflineColor ? { rooflineColor } : {}),
       revenue: Number(revenue),
       status,
+      ...(completedAt ? { completedAt } : {}),
       scheduledDate,
       ...payFields,
       miscCost: Number(miscCost) || 0,
@@ -2320,6 +2372,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
           <div className={"pill" + (status === 'Scheduled' ? ' active' : '')} onClick={() => setStatus('Scheduled')}>Scheduled</div>
           <div className={"pill gold" + (status === 'Completed' ? ' active' : '')} onClick={() => setStatus('Completed')}>Completed</div>
         </div>
+        <div className="hint">Marking it Completed takes its lights off your inventory shelf.</div>
 
         <label style={{ marginTop: 16 }}>Payment</label>
         {[['deposit', 'Deposit 50%', pay.deposit, deposit, setDeposit], ['balance', 'Balance', pay.balance, balance, setBalance]].map(([which, name, amount, st, setSt]) => {
