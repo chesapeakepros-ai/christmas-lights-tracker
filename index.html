@@ -353,6 +353,7 @@
   .payout-row:last-of-type { border-bottom: none; }
   .payout-job { padding: 10px 0; border-top: 1px dashed var(--border); font-size: 12.5px; color: var(--muted); line-height: 1.5; }
   .payout-job b { color: var(--text); }
+  .payout-split { display: block; margin-top: 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
   .icon-btn {
     display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 11px;
     background: none; border: none; cursor: pointer; color: var(--muted); font-size: 16px;
@@ -997,8 +998,20 @@ const isRealized = (job) => job.status === 'Completed' && jobPayments(job).fully
 // Jobs saved before scheduling existed fall back to the date they were created.
 const scheduledOf = (job) => job.scheduledDate || (job.date ? job.date.slice(0, 10) : '');
 
-// Commission owed per pay week: completed jobs, grouped by the week of their scheduled
-// (install) date. Newest week first.
+// A customer tip goes to the crew, not the business: it's split evenly between the job's
+// techs and is never counted as revenue, cost or profit.
+const tipOf = (job) => Math.max(0, Number(job.tip) || 0);
+function tipByTech(job) {
+  const assigns = job.assignments || [];
+  const tip = tipOf(job);
+  const out = {};
+  if (!tip || !assigns.length) return out;
+  assigns.forEach(a => { out[a.techId] = (out[a.techId] || 0) + tip / assigns.length; });
+  return out;
+}
+
+// Pay owed per pay week (commission plus tips): completed jobs, grouped by the week of their
+// scheduled (install) date. Newest week first.
 function weeklyPayouts(jobs, settings) {
   const weeks = {};
   jobs.forEach(job => {
@@ -1006,15 +1019,20 @@ function weeklyPayouts(jobs, settings) {
     if (job.status !== 'Completed' || !day) return;
     const calc = computeJobFinancials(job, settings);
     if (!calc.techCount) return;
+    const tips = tipByTech(job);
     const monday = weekStartOf(day);
     const key = ymdOf(monday);
-    const week = weeks[key] || (weeks[key] = { key, monday, total: 0, byTech: {}, jobs: [] });
-    week.jobs.push({ job, calc, owed: jobPayments(job).outstanding });
+    const week = weeks[key] || (weeks[key] = { key, monday, total: 0, tips: 0, byTech: {}, jobs: [] });
+    week.jobs.push({ job, calc, owed: jobPayments(job).outstanding, tips });
     Object.entries(calc.payByTech).forEach(([techId, amount]) => {
-      const t = week.byTech[techId] || (week.byTech[techId] = { techId, amount: 0, jobCount: 0 });
-      t.amount += amount;
+      const tip = tips[techId] || 0;
+      const t = week.byTech[techId] || (week.byTech[techId] = { techId, amount: 0, commission: 0, tips: 0, jobCount: 0 });
+      t.commission += amount;
+      t.tips += tip;
+      t.amount += amount + tip;
       t.jobCount += 1;
-      week.total += amount;
+      week.total += amount + tip;
+      week.tips += tip;
     });
   });
   Object.values(weeks).forEach(w => w.jobs.sort((a, b) => scheduledOf(a.job).localeCompare(scheduledOf(b.job))));
@@ -1702,13 +1720,20 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
   const thisWeek = ymdOf(weekStartOf(todayYMD()));
   const nameOf = (id) => (allTechs.find(t => t.id === id) || {}).name || 'Former tech';
   const toggle = (key) => setOpenWeeks(o => ({ ...o, [key]: !o[key] }));
+  // Tips on completed jobs with nobody assigned can't be paid out; flag them so they aren't lost.
+  const strandedTips = jobs.filter(j => j.status === 'Completed' && tipOf(j) > 0 && !(j.assignments || []).length);
 
   return (
     <div>
       <div className="section-title" style={{ marginTop: 6 }}>Weekly Payouts</div>
       <div className="hint" style={{ marginBottom: 10 }}>
-        Commission owed from completed jobs, grouped by the week of each job's scheduled date (Monday–Sunday).
+        Commission and customer tips owed from completed jobs, grouped by the week of each job's scheduled date (Monday–Sunday).
       </div>
+      {strandedTips.length > 0 && (
+        <div className="card" style={{ padding: '10px 14px', color: 'var(--loss)', fontSize: 13, fontWeight: 600 }}>
+          ⚠ {fmtMoney2(strandedTips.reduce((s, j) => s + tipOf(j), 0))} in tips is on completed {strandedTips.length === 1 ? 'job' : 'jobs'} with no techs ({strandedTips.map(j => j.customer).join(', ')}). Add the techs to {strandedTips.length === 1 ? 'that job' : 'those jobs'} so the tip gets paid out.
+        </div>
+      )}
       {weeks.length === 0 ? (
         <div className="card"><div className="empty-state">
           <div className="big">💵</div>
@@ -1725,12 +1750,14 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontWeight: 800, fontSize: 17 }}>{fmtMoney2(w.total)}</div>
-                <div className="tech-meta">total payout</div>
+                <div className="tech-meta">total payout{w.tips > 0 ? ` · incl. ${fmtMoney2(w.tips)} tips` : ''}</div>
               </div>
             </div>
             {Object.values(w.byTech).sort((a, b) => b.amount - a.amount).map(t => (
               <div className="payout-row" key={t.techId}>
-                <span><b>{nameOf(t.techId)}</b> <span className="tech-meta">· {t.jobCount} {t.jobCount === 1 ? 'job' : 'jobs'}</span></span>
+                <span><b>{nameOf(t.techId)}</b> <span className="tech-meta">· {t.jobCount} {t.jobCount === 1 ? 'job' : 'jobs'}</span>
+                  {t.tips > 0 && <span className="payout-split">{fmtMoney2(t.commission)} commission + 🎁 {fmtMoney2(t.tips)} tips</span>}
+                </span>
                 <span style={{ fontWeight: 800, color: 'var(--profit)' }}>{fmtMoney2(t.amount)}</span>
               </div>
             ))}
@@ -1744,12 +1771,15 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
             </button>
             {openWeeks[w.key] && (
               <div style={{ marginTop: 8 }}>
-                {w.jobs.map(({ job, calc, owed }) => (
+                {w.jobs.map(({ job, calc, owed, tips }) => (
                   <div className="payout-job" key={job.id}>
                     <b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))}
                     {owed > 0 && <span className="badge badge-owed" style={{ marginLeft: 6 }}>Customer owes {fmtMoney(owed)}</span>}
                     <div>{fmtMoney2(job.revenue)} job · {pct2(calc.commissionPct)}% commission = {fmtMoney2(calc.commissionPool)}</div>
                     <div>{calc.shares.map(s => `${nameOf(s.techId)} ${pct2(s.pct)}% = ${fmtMoney2(s.amount)}`).join(' · ')}</div>
+                    {tipOf(job) > 0 && (
+                      <div>🎁 {fmtMoney2(tipOf(job))} tip, split evenly: {Object.entries(tips).map(([id, amt]) => `${nameOf(id)} ${fmtMoney2(amt)}`).join(' · ')}</div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1820,7 +1850,7 @@ function TechModal({ tech, onClose, onSave }) {
         <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mike Johnson" autoFocus
           onKeyDown={e => { if (e.key === 'Enter') save(); }} />
         <div className="hint" style={{ marginTop: 10 }}>
-          Techs earn a commission % of each job they work. You set each tech's % on the job; new jobs start with your default from Settings, split evenly.
+          Techs earn a commission % of each job they work, plus an even share of any customer tip on it. You set each tech's % on the job; new jobs start with your default from Settings, split evenly.
         </div>
       </div>
     </Sheet>
@@ -1930,6 +1960,7 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
                   📅 {fmtDateOnly(scheduledOf(job)) || 'No date'} · {(Number(job.feet) || 0).toLocaleString()} ft{job.rooflineColor ? ` ${job.rooflineColor}` : ''}
                   {calc.mini.charged > 0 && ` · ${calc.mini.charged} mini ball${calc.mini.charged === 1 ? '' : 's'}${calc.mini.usingEstimate ? ' (est.)' : ''}`}
                   {mockupIdsOf(job).length > 0 && ` · 🖼️ ${mockupIdsOf(job).length} picture${mockupIdsOf(job).length === 1 ? '' : 's'}`}
+                  {tipOf(job) > 0 && ` · 🎁 ${fmtMoney2(tipOf(job))} tip`}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1989,6 +2020,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
   const [status, setStatus] = useState(job.status || 'Scheduled');
   const [miscCost, setMiscCost] = useState(job.miscCost != null ? String(job.miscCost) : '');
   const [miscNote, setMiscNote] = useState(job.miscNote || '');
+  const [tip, setTip] = useState(tipOf(job) > 0 ? String(job.tip) : '');
   const [date] = useState(job.date || new Date().toISOString());
   const [scheduledDate, setScheduledDate] = useState(job.scheduledDate || (job.date ? job.date.slice(0, 10) : todayYMD()));
   // Older jobs can be marked paid with no method recorded; keep them paid rather than reset.
@@ -2109,6 +2141,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
       }
     }
     if (calc.commissionPct > 100) { alert('Total commission can’t be more than 100% of the job.'); return; }
+    if (tip !== '' && (isNaN(Number(tip)) || Number(tip) < 0)) { alert('Enter a valid tip amount, or leave it blank.'); return; }
 
     const jobId = job.id || uid();
     // Keep the pictures in the order shown. Ones not on this device yet are kept, not dropped.
@@ -2143,6 +2176,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
       ...payFields,
       miscCost: Number(miscCost) || 0,
       miscNote: miscNote.trim(),
+      ...(Number(tip) > 0 ? { tip: Number(tip) } : {}),
       date,
       assignments: previewJob.assignments,
     });
@@ -2342,6 +2376,21 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
             Split {pct2(calc.commissionPct || defaultPct)}% evenly
           </button>
         )}
+        </div>
+
+        <div className="form-section">
+        <label>🎁 Customer Tip ($)</label>
+        <input type="number" inputMode="decimal" min="0" step="0.01" value={tip} onChange={e => setTip(e.target.value)} placeholder="0.00" aria-label="Customer tip" />
+        <div className="hint">
+          {!(Number(tip) > 0)
+            ? 'If the customer tips the crew, enter it here. It’s split evenly between the techs on this job and added to their weekly payout. It isn’t counted as job revenue or profit.'
+            : calc.techCount === 0
+              ? <span style={{ color: 'var(--loss)' }}>Check off the techs above so this tip gets paid out.</span>
+              : <React.Fragment>
+                  Split evenly: <b>{assignments.map(a => `${(techs.find(t => t.id === a.techId) || {}).name || 'Former tech'} ${fmtMoney2(Number(tip) / assignments.length)}`).join(' · ')}</b>.
+                  {' '}Added to their weekly payout once the job is Completed. Not counted as job revenue or profit.
+                </React.Fragment>}
+        </div>
         </div>
 
         <div className="form-section">
