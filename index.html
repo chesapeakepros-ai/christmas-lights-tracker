@@ -924,7 +924,9 @@ const sameName = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().t
 
 // What one job takes from stock: its feet of line, one bulb per socket dealt out across its color
 // pattern, one timer, and its mini light balls by color (the actual count once entered, else the estimate).
+// A job set to use extra lights (stock kept outside the inventory) takes only its timer.
 function jobStockUse(job, settings) {
+  if (job.extraLights) return { line: 0, noColor: 0, timers: 1, bulbs: {}, mini: {} };
   const feet = Math.max(0, Number(job.feet) || 0);
   const pattern = ROOFLINE_PATTERNS[job.rooflineColor];
   const bulbs = {};
@@ -1546,6 +1548,7 @@ const fmtQty = (n) => Math.round(n).toLocaleString();
 
 function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
   const needs = useMemo(() => inventoryNeeds(jobs, settings), [jobs, settings.bulbSpacingIn]);
+  const extraJobs = jobs.filter(j => j.extraLights && j.status !== 'Completed');
   const spacing = spacingOf(settings);
   const [open, setOpen] = useState(null); // "kind:color" row showing its jobs
 
@@ -1640,6 +1643,11 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
           its line, bulbs, mini lights and timer off the shelf. <b>Needed</b> is what the jobs that aren’t done yet will use.
           Mark finished jobs Completed before you count.
         </div>
+        {extraJobs.length > 0 && (
+          <div className="hint">
+            🎄 Using your extra lights, so their lights aren’t counted here: <b>{extraJobs.map(j => j.customer || 'Untitled job').join(', ')}</b>.
+          </div>
+        )}
       </div>
 
       {needs.noColor.needed > 0 && (
@@ -2009,6 +2017,7 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
                   {calc.mini.charged > 0 && ` · ${calc.mini.charged} mini ball${calc.mini.charged === 1 ? '' : 's'}${calc.mini.usingEstimate ? ' (est.)' : ''}`}
                   {mockupIdsOf(job).length > 0 && ` · 🖼️ ${mockupIdsOf(job).length} picture${mockupIdsOf(job).length === 1 ? '' : 's'}`}
                   {tipOf(job) > 0 && ` · 🎁 ${fmtMoney2(tipOf(job))} tip`}
+                  {job.extraLights && ' · extra lights'}
                 </div>
               </div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -2059,6 +2068,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
   const [customer, setCustomer] = useState(job.customer || '');
   const [feet, setFeet] = useState(job.feet != null ? String(job.feet) : '');
   const [rooflineColor, setRooflineColor] = useState(job.rooflineColor || '');
+  const [extraLights, setExtraLights] = useState(!!job.extraLights);
   // Mini light color suggestions: what's in inventory first, then the usual colors.
   const miniColorOptions = [
     ...(inventory || []).filter(i => i.kind === 'mini' && i.name.trim()).map(i => i.name.trim()),
@@ -2221,6 +2231,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
       ...(mockupIds.length ? { mockupIds } : {}),
       feet: Number(feet),
       ...(rooflineColor ? { rooflineColor } : {}),
+      ...(extraLights ? { extraLights: true } : {}),
       revenue: Number(revenue),
       status,
       ...(completedAt ? { completedAt } : {}),
@@ -2264,6 +2275,19 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
         </div>
 
         <div className="form-section">
+        <label>Lights From</label>
+        <div className="pill-group">
+          <div className={"pill" + (!extraLights ? ' active' : '')} onClick={() => setExtraLights(false)}>Inventory</div>
+          <div className={"pill gold" + (extraLights ? ' active' : '')} onClick={() => setExtraLights(true)}>Extra lights</div>
+        </div>
+        <div className="hint">
+          {extraLights
+            ? 'Uses your extra lights, so this job’s line, bulbs and mini lights don’t come out of Inventory. Its timer still does.'
+            : 'This job’s line, bulbs and mini lights come out of Inventory. Pick Extra lights if you’re using stock you don’t count there.'}
+        </div>
+        </div>
+
+        <div className="form-section">
         <label>Roofline Color</label>
         <div className="color-grid">
           {Object.keys(ROOFLINE_PATTERNS).map(name => (
@@ -2277,7 +2301,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
         {Number(feet) > 0 && (() => {
           const sockets = socketsFor(Number(feet), settings);
           const intro = `${Number(feet).toLocaleString()} ft of ${spacingOf(settings)}″ line = ${sockets.toLocaleString()} bulbs`;
-          if (!ROOFLINE_PATTERNS[rooflineColor]) return <div className="hint">{intro}. Pick a color so the bulbs count against your inventory.</div>;
+          if (!ROOFLINE_PATTERNS[rooflineColor]) return <div className="hint">{intro}.{extraLights ? '' : ' Pick a color so the bulbs count against your inventory.'}</div>;
           const split = bulbsByColor(ROOFLINE_PATTERNS[rooflineColor], sockets);
           return (
             <div className="hint">
