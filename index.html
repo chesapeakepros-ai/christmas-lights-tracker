@@ -502,6 +502,16 @@
   .inv-use { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--border); cursor: pointer; font-size: 12.5px; }
   .inv-use:last-child { border-bottom: none; }
   .inv-use > span:last-child { white-space: nowrap; }
+  .ship-field { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
+  .ship-field input { width: 58px; padding: 7px 8px; font-size: 15px; text-align: center; }
+  .week-plan { padding: 14px 0 12px; }
+  .week-plan + .week-plan { border-top: 1px solid var(--border); }
+  .week-uses { margin-top: 6px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+  .order-box { margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: var(--warn-soft); color: var(--text); font-size: 13px; line-height: 1.5; }
+  .order-box .when { font-weight: 800; color: var(--warn); }
+  .order-box.late { background: var(--loss-soft); }
+  .order-box.late .when { color: var(--loss); }
+  .covered { margin-top: 8px; font-size: 13px; font-weight: 700; color: var(--profit); }
   .inv-use-head { padding: 9px 0 3px; font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
   .inv-use b { color: var(--text); }
 
@@ -591,7 +601,8 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 // Lights are logged once as a business expense, so the light cost per foot only shows on the
 // Jobs tab ("with lights" figures). It never reaches the Dashboard, which would count it twice.
 // inventoryAsOf: the count date for stock entered before counts were time-stamped (the user's first count was 2026-10-28).
-const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15, inventoryAsOf: '2026-10-28' };
+// shippingDays: business days an inventory order takes to arrive (for order-by dates).
+const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15, inventoryAsOf: '2026-10-28', shippingDays: 5 };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -992,6 +1003,54 @@ function takenSince(jobs, countedAt, pick, settings) {
     if (amount > 0) { out.amount += amount; out.uses.push({ job, amount }); }
   });
   return out;
+}
+
+// Order-by dates: shipping takes `shippingDays` business days (weekends skipped, holidays not),
+// and an order should arrive by the business day before the install.
+const dateOfYmd = (ymd) => { const [y, m, d] = ymd.split('-').map(Number); return new Date(y, m - 1, d); };
+function addBusinessDays(date, n) {
+  const d = new Date(date);
+  const step = n < 0 ? -1 : 1;
+  for (let left = Math.abs(n); left > 0;) {
+    d.setDate(d.getDate() + step);
+    if (d.getDay() !== 0 && d.getDay() !== 6) left--;
+  }
+  return d;
+}
+const orderByFor = (installYmd, shippingDays) => ymdOf(addBusinessDays(addBusinessDays(dateOfYmd(installYmd), -1), -shippingDays));
+
+// Week-by-week plan: upcoming jobs in date order use up what's on the shelf. For each week,
+// what its jobs use and, for anything that runs out, how much more to order and by when (based
+// on the first install that week that's short). Jobs dated before this week that aren't
+// Completed yet are grouped first. `rows` are the Inventory rows: { key, have, pick }.
+function weeklyStockPlan(jobs, rows, settings) {
+  const shippingDays = Math.max(0, Math.round(Number(settings.shippingDays) || 0));
+  const thisMonday = ymdOf(weekStartOf(todayYMD()));
+  const balance = Object.fromEntries(rows.map(r => [r.key, r.have]));
+  const weeks = [];
+  jobs.filter(j => j.status !== 'Completed' && scheduledOf(j))
+    .map(job => ({ job, day: scheduledOf(job), use: jobStockUse(job, settings) }))
+    .sort((a, b) => a.day.localeCompare(b.day))
+    .forEach(({ job, day, use }) => {
+      const weekKey = ymdOf(weekStartOf(day));
+      const key = weekKey < thisMonday ? 'earlier' : weekKey;
+      let week = weeks.find(w => w.key === key);
+      if (!week) weeks.push(week = { key, monday: key === 'earlier' ? null : weekStartOf(day), jobs: [], uses: {}, short: {} });
+      week.jobs.push(job);
+      rows.forEach(r => {
+        const amount = r.pick(use) || 0;
+        if (!amount) return;
+        week.uses[r.key] = (week.uses[r.key] || 0) + amount;
+        const before = balance[r.key];
+        balance[r.key] = before - amount;
+        const newlyShort = Math.max(0, -balance[r.key]) - Math.max(0, -before);
+        if (newlyShort > 0) {
+          const s = week.short[r.key] || (week.short[r.key] = { amount: 0, orderBy: orderByFor(day, shippingDays) });
+          s.amount += newlyShort;
+        }
+      });
+    });
+  return { weeks, shippingDays, thisMonday };
 }
 
 // ---- Deposit / balance tracking (deposit is half the job revenue) ----
@@ -1546,7 +1605,7 @@ function CommitInput({ value, onCommit, ...props }) {
 const validQty = (text) => text.trim() !== '' && !isNaN(Number(text)) && Number(text) >= 0;
 const fmtQty = (n) => Math.round(n).toLocaleString();
 
-function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
+function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, onEditJob }) {
   const needs = useMemo(() => inventoryNeeds(jobs, settings), [jobs, settings.bulbSpacingIn]);
   const extraJobs = jobs.filter(j => j.extraLights && j.status !== 'Completed');
   const spacing = spacingOf(settings);
@@ -1574,7 +1633,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
     const countedAt = countedAtOf(item, settings);
     const taken = takenSince(jobs, countedAt, pick, settings);
     const counted = item ? Number(item.qty) || 0 : 0;
-    return { key, kind, name, item, countedAt, taken, have: Math.max(0, counted - Math.ceil(taken.amount - 1e-6)), need: need(bucket), uses: bucket ? bucket.uses : [] };
+    return { key, kind, name, item, countedAt, taken, pick, have: Math.max(0, counted - Math.ceil(taken.amount - 1e-6)), need: need(bucket), uses: bucket ? bucket.uses : [] };
   };
   const timerRow = makeRow('timer', 'timer', 'Timers', itemsOf('timer')[0], needs.timers, u => u.timers);
   const lineRow = makeRow('line', 'line', 'Line', itemsOf('line')[0], needs.line, u => u.line);
@@ -1599,6 +1658,37 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
     ...(timerRow.need > timerRow.have ? [{ name: 'Timers', amount: timerRow.need - timerRow.have, unit: '', what: 'one per job' }] : []),
     ...miniRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'balls', what: 'mini lights' })),
   ];
+
+  // Week by week: what each week's jobs use, and order-by dates for whatever runs out.
+  const allRows = [lineRow, ...bulbRows, timerRow, ...miniRows];
+  const plan = weeklyStockPlan(jobs, allRows, settings);
+  const amountText = (row, n) => {
+    const q = fmtQty(Math.ceil(n - 1e-6));
+    if (row.kind === 'line') return `${q} ft line`;
+    if (row.kind === 'bulb') return `${q} ${row.name} bulbs`;
+    if (row.kind === 'timer') return `${q} timer${q === '1' ? '' : 's'}`;
+    return `${q} ${row.name || 'unnamed'} mini balls`;
+  };
+  const rowByKey = Object.fromEntries(allRows.map(r => [r.key, r]));
+  const today = todayYMD();
+  const fmtOrderDay = (ymd) => dateOfYmd(ymd).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  const nextMonday = (() => { const d = dateOfYmd(plan.thisMonday); d.setDate(d.getDate() + 7); return ymdOf(d); })();
+  const weekLabel = (w) => w.key === 'earlier' ? 'Earlier — not marked Completed yet'
+    : w.key === plan.thisMonday ? 'This week' : w.key === nextMonday ? 'Next week'
+    : 'Week of ' + w.monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  // A week's orders, grouped by their order-by date (soonest first).
+  const ordersOf = (w) => {
+    const byDate = {};
+    allRows.forEach(r => { const s = w.short[r.key]; if (s) (byDate[s.orderBy] = byDate[s.orderBy] || []).push(amountText(r, s.amount)); });
+    return Object.keys(byDate).sort().map(date => ({ date, items: byDate[date] }));
+  };
+  const firstOrderBy = plan.weeks.flatMap(w => Object.values(w.short).map(s => s.orderBy)).sort()[0];
+  const setShipping = (text) => {
+    const n = Number(text);
+    if (text.trim() === '' || isNaN(n) || n < 0 || n > 60) { alert('Enter the shipping time in business days, like 5.'); return false; }
+    setSettings(s => ({ ...s, shippingDays: Math.round(n) }));
+    toast('Shipping time saved');
+  };
 
   const fmtCounted = (countedAt) => countedAt.length > 10
     ? new Date(countedAt).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
@@ -1638,6 +1728,13 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
             <span style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtQty(s.amount)} {s.unit}</span>
           </div>
         ))}
+        {firstOrderBy && (
+          <div className={'order-box' + (firstOrderBy < today ? ' late' : '')}>
+            ⏰ {firstOrderBy < today
+              ? <React.Fragment><span className="when">Some orders are late</span> — they should have gone in by {fmtOrderDay(firstOrderBy)}. Order now; see Week by Week.</React.Fragment>
+              : <React.Fragment>Next order-by date: <span className="when">{firstOrderBy === today ? 'today' : fmtOrderDay(firstOrderBy)}</span>. See Week by Week for what to order when.</React.Fragment>}
+          </div>
+        )}
         <div className="hint" style={{ marginTop: 12 }}>
           <b>On shelf</b> is what’s in your shop now. Type the real number whenever you count. Marking a job <b>Completed</b> takes
           its line, bulbs, mini lights and timer off the shelf. <b>Needed</b> is what the jobs that aren’t done yet will use.
@@ -1648,6 +1745,44 @@ function InventoryTab({ jobs, inventory, setInventory, settings, onEditJob }) {
             🎄 Using your extra lights, so their lights aren’t counted here: <b>{extraJobs.map(j => j.customer || 'Untitled job').join(', ')}</b>.
           </div>
         )}
+      </div>
+
+      <div className="card inv-wide">
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <div className="section-title" style={{ marginBottom: 0 }}>Week by Week</div>
+          <div className="ship-field">
+            Shipping
+            <CommitInput type="number" inputMode="numeric" min="0" step="1" value={plan.shippingDays} aria-label="Shipping time in business days" onCommit={setShipping} />
+            business days
+          </div>
+        </div>
+        <div className="hint">
+          Your upcoming jobs in date order, using up what’s on the shelf. When something runs out, order it by the date shown so it
+          arrives the business day before that install ({plan.shippingDays} business days of shipping; weekends skipped, holidays not).
+        </div>
+        {plan.weeks.length === 0 ? (
+          <div className="hint">No upcoming jobs right now.</div>
+        ) : plan.weeks.map(w => {
+          const orders = ordersOf(w);
+          const uses = allRows.filter(r => w.uses[r.key] > 0).map(r => amountText(r, w.uses[r.key]));
+          return (
+            <div className="week-plan" key={w.key}>
+              <div className="tech-name">{weekLabel(w)}</div>
+              <div className="tech-meta">
+                {w.monday ? fmtWeekRange(w.monday) + ' · ' : ''}{w.jobs.length} {w.jobs.length === 1 ? 'job' : 'jobs'}: {w.jobs.map(j => j.customer || 'Untitled job').join(', ')}
+              </div>
+              <div className="week-uses">Uses {uses.length ? uses.join(' · ') : 'nothing from inventory'}</div>
+              {orders.length === 0 ? (
+                <div className="covered">✓ Covered by what’s on the shelf</div>
+              ) : orders.map(o => (
+                <div key={o.date} className={'order-box' + (o.date < today ? ' late' : '')}>
+                  <span className="when">{o.date < today ? `Order now — was due ${fmtOrderDay(o.date)}` : o.date === today ? 'Order today' : `Order by ${fmtOrderDay(o.date)}`}</span>
+                  : {o.items.join(' · ')}
+                </div>
+              ))}
+            </div>
+          );
+        })}
       </div>
 
       {needs.noColor.needed > 0 && (
