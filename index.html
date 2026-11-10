@@ -928,17 +928,19 @@ const ROOFLINE_PATTERN_HINTS = {
   'Classic Christmas': 'red, green & pure white',
   'Multicolor': 'multicolor',
 };
-// Inventory items: { id, kind: 'line' | 'bulb' | 'timer' | 'mini' | 'other', name, qty, note, countedAt }.
+// Inventory items: { id, kind: 'line' | 'bulb' | 'timer' | 'clip' | 'mini' | 'other', name, qty, note, countedAt }.
 // qty is the shelf count as of countedAt (when it was typed in).
 // (A first version stocked roofline as feet per color, kind 'roofline'; migrate() converts it.)
 const sameName = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().toLowerCase();
 
 // What one job takes from stock: its feet of line, one bulb per socket dealt out across its color
-// pattern, one timer, and its mini light balls by color (the actual count once entered, else the estimate).
-// A job set to use extra lights (stock kept outside the inventory) takes only its timer.
+// pattern, one clip per bulb, one timer, and its mini light balls by color (the actual count once
+// entered, else the estimate). A job set to use extra lights (stock kept outside the inventory,
+// which already has clips on it) takes only its timer.
 function jobStockUse(job, settings) {
-  if (job.extraLights) return { line: 0, noColor: 0, timers: 1, bulbs: {}, mini: {} };
+  if (job.extraLights) return { line: 0, noColor: 0, timers: 1, clips: 0, bulbs: {}, mini: {} };
   const feet = Math.max(0, Number(job.feet) || 0);
+  const clips = socketsFor(feet, settings);
   const pattern = ROOFLINE_PATTERNS[job.rooflineColor];
   const bulbs = {};
   if (feet > 0 && pattern) bulbsByColor(pattern, socketsFor(feet, settings)).forEach(([color, count]) => {
@@ -952,7 +954,7 @@ function jobStockUse(job, settings) {
     const key = color.toLowerCase();
     (mini[key] || (mini[key] = { color, balls: 0 })).balls += balls;
   });
-  return { line: feet, noColor: pattern ? 0 : feet, timers: 1, bulbs, mini };
+  return { line: feet, noColor: pattern ? 0 : feet, timers: 1, clips, bulbs, mini };
 }
 
 // Inventory counts are what's on the shelf. Jobs that aren't completed yet still need their
@@ -960,6 +962,7 @@ function jobStockUse(job, settings) {
 function inventoryNeeds(jobs, settings) {
   const line = { needed: 0, uses: [] };   // feet of line, every job with roofline
   const timers = { needed: 0, uses: [] }; // one timer goes with every job
+  const clips = { needed: 0, uses: [] };  // one clip per C9 bulb on the roofline
   const bulbs = {};      // base color -> { needed, uses: [{ job, amount }] }
   const mini = {};       // lowercased color -> { color, needed, uses }
   const noColor = { needed: 0, uses: [] };  // feet whose bulb colors aren't picked yet
@@ -972,12 +975,13 @@ function inventoryNeeds(jobs, settings) {
     if (job.status === 'Completed') return;
     const use = jobStockUse(job, settings);
     add(timers, job, use.timers);
+    if (use.clips) add(clips, job, use.clips);
     if (use.line) add(line, job, use.line);
     if (use.noColor) add(noColor, job, use.noColor);
     Object.entries(use.bulbs).forEach(([color, count]) => add(bulbs[color] || (bulbs[color] = { needed: 0, uses: [] }), job, count));
     Object.entries(use.mini).forEach(([key, m]) => add(mini[key] || (mini[key] = { color: m.color, needed: 0, uses: [] }), job, m.balls));
   });
-  return { line, bulbs, timers, mini, noColor };
+  return { line, bulbs, timers, clips, mini, noColor };
 }
 
 // When an item was last counted: the moment a count was typed in (a timestamp), or for counts
@@ -1636,6 +1640,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
     return { key, kind, name, item, countedAt, taken, pick, have: Math.max(0, counted - Math.ceil(taken.amount - 1e-6)), need: need(bucket), uses: bucket ? bucket.uses : [] };
   };
   const timerRow = makeRow('timer', 'timer', 'Timers', itemsOf('timer')[0], needs.timers, u => u.timers);
+  const clipRow = makeRow('clip', 'clip', 'Clips', itemsOf('clip')[0], needs.clips, u => u.clips);
   const lineRow = makeRow('line', 'line', 'Line', itemsOf('line')[0], needs.line, u => u.line);
   const bulbRows = ROOFLINE_BASE_COLORS.map(color =>
     makeRow('bulb:' + color, 'bulb', color, itemsOf('bulb').find(i => sameName(i.name, color)), needs.bulbs[color], u => u.bulbs[color]));
@@ -1656,17 +1661,19 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
     ...(lineRow.need > lineRow.have ? [{ name: `${spacing}″ line`, amount: lineRow.need - lineRow.have, unit: 'ft', what: 'roofline' }] : []),
     ...bulbRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'bulbs', what: 'roofline bulbs' })),
     ...(timerRow.need > timerRow.have ? [{ name: 'Timers', amount: timerRow.need - timerRow.have, unit: '', what: 'one per job' }] : []),
+    ...(clipRow.need > clipRow.have ? [{ name: 'Clips', amount: clipRow.need - clipRow.have, unit: '', what: 'one per C9 bulb' }] : []),
     ...miniRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'balls', what: 'mini lights' })),
   ];
 
   // Week by week: what each week's jobs use, and order-by dates for whatever runs out.
-  const allRows = [lineRow, ...bulbRows, timerRow, ...miniRows];
+  const allRows = [lineRow, ...bulbRows, timerRow, clipRow, ...miniRows];
   const plan = weeklyStockPlan(jobs, allRows, settings);
   const amountText = (row, n) => {
     const q = fmtQty(Math.ceil(n - 1e-6));
     if (row.kind === 'line') return `${q} ft line`;
     if (row.kind === 'bulb') return `${q} ${row.name} bulbs`;
     if (row.kind === 'timer') return `${q} timer${q === '1' ? '' : 's'}`;
+    if (row.kind === 'clip') return `${q} clip${q === '1' ? '' : 's'}`;
     return `${q} ${row.name || 'unnamed'} mini balls`;
   };
   const rowByKey = Object.fromEntries(allRows.map(r => [r.key, r]));
@@ -1721,7 +1728,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
       <div className="card" style={shortages.length ? { borderColor: 'var(--loss)', boxShadow: '0 0 0 3px var(--loss-soft)' } : {}}>
         <div className="section-title">{shortages.length ? 'Need to Order' : 'Stock Check'}</div>
         {shortages.length === 0 ? (
-          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers and mini lights on the shelf for every job that isn’t done yet.</div>
+          <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers, clips and mini lights on the shelf for every job that isn’t done yet.</div>
         ) : shortages.map(s => (
           <div className="payout-row" key={s.what + s.name}>
             <span><b>{s.name}</b> <span className="tech-meta">{s.what}</span></span>
@@ -1737,7 +1744,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         )}
         <div className="hint" style={{ marginTop: 12 }}>
           <b>On shelf</b> is what’s in your shop now. Type the real number whenever you count. Marking a job <b>Completed</b> takes
-          its line, bulbs, mini lights and timer off the shelf. <b>Needed</b> is what the jobs that aren’t done yet will use.
+          its line, bulbs, mini lights, timer and clips off the shelf. <b>Needed</b> is what the jobs that aren’t done yet will use.
           Mark finished jobs Completed before you count.
         </div>
         {extraJobs.length > 0 && (
@@ -1833,7 +1840,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
       </div>
 
       <div className="card">
-        <div className="section-title">Timers</div>
+        <div className="section-title">Timers &amp; Clips</div>
         <div className="inv-grid inv-head"><span></span><span>On shelf</span><span>Needed</span><span>Left</span></div>
         <div className="inv-grid">
           <span className="inv-name" onClick={() => setOpen(open === 'timer' ? null : 'timer')}>Timers <span className="tech-meta">{open === 'timer' ? '▾' : '▸'}</span></span>
@@ -1843,7 +1850,15 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
           {leftCell(timerRow)}
         </div>
         {usesList(timerRow, 'timer')}
-        <div className="hint">Every job gets one timer.</div>
+        <div className="inv-grid">
+          <span className="inv-name" onClick={() => setOpen(open === 'clip' ? null : 'clip')}>Clips <span className="tech-meta">{open === 'clip' ? '▾' : '▸'}</span></span>
+          <CommitInput type="number" inputMode="numeric" min="0" step="1" value={clipRow.have} aria-label="Clips on hand"
+            onCommit={text => setQty('clip', 'Clips', text)} />
+          <span className="inv-num">{fmtQty(clipRow.need)}</span>
+          {leftCell(clipRow)}
+        </div>
+        {usesList(clipRow, 'clips')}
+        <div className="hint">Every job gets one timer, and one clip for every C9 bulb ({fmtQty(socketsFor(100, settings))} clips per 100 ft). Jobs on extra lights don’t use clips from here, since those lights already have them.</div>
       </div>
 
       <div className="card">
@@ -1887,7 +1902,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
 
       <div className="card">
         <div className="section-title">Other Supplies</div>
-        {itemsOf('other').length === 0 && <div className="hint" style={{ marginTop: 0 }}>Clips, timers, extension cords, stakes… whatever else you keep on hand.</div>}
+        {itemsOf('other').length === 0 && <div className="hint" style={{ marginTop: 0 }}>Extension cords, stakes, zip ties… whatever else you keep on hand.</div>}
         {itemsOf('other').length > 0 && <div className="other-grid inv-head"><span>Item</span><span>Qty</span><span>Note</span><span></span></div>}
         {itemsOf('other').map(item => (
           <div className="other-grid" key={item.id}>
@@ -2417,8 +2432,8 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
         </div>
         <div className="hint">
           {extraLights
-            ? 'Uses your extra lights, so this job’s line, bulbs and mini lights don’t come out of Inventory. Its timer still does.'
-            : 'This job’s line, bulbs and mini lights come out of Inventory. Pick Extra lights if you’re using stock you don’t count there.'}
+            ? 'Uses your extra lights (clips already on them), so this job’s line, bulbs, clips and mini lights don’t come out of Inventory. Its timer still does.'
+            : 'This job’s line, bulbs, clips and mini lights come out of Inventory. Pick Extra lights if you’re using stock you don’t count there.'}
         </div>
         </div>
 
@@ -2445,7 +2460,9 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
             </div>
           );
         })()}
-        <div className="hint">⏲ Plus <b>1 timer</b>. Every job gets one, and it’s counted in Inventory.</div>
+        <div className="hint">
+          ⏲ Plus <b>1 timer</b>{Number(feet) > 0 && !extraLights && <React.Fragment> and <b>{socketsFor(Number(feet), settings).toLocaleString()} clips</b> (one per bulb)</React.Fragment>}, counted in Inventory.
+        </div>
         </div>
 
         <div className="form-section">
