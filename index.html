@@ -503,6 +503,8 @@
   .inv-use { display: flex; justify-content: space-between; gap: 8px; padding: 8px 0; border-bottom: 1px dashed var(--border); cursor: pointer; font-size: 12.5px; }
   .inv-use:last-child { border-bottom: none; }
   .inv-use > span:last-child { white-space: nowrap; }
+  select.add-color { width: auto; max-width: 100%; margin-top: 8px; font-size: 14px; font-weight: 700; padding: 9px 34px 9px 12px; }
+  .mini-grid select { padding: 9px 26px 9px 10px; font-size: 15px; background-position: right 9px center; }
   .ship-field { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; color: var(--muted); }
   .ship-field input { width: 58px; padding: 7px 8px; font-size: 15px; text-align: center; }
   .week-plan { padding: 14px 0 12px; }
@@ -1632,6 +1634,21 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
   const updateItem = (id, patch) => { setInventory(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i)); toast('Stock updated'); };
   const removeItem = (id) => { setInventory(prev => prev.filter(i => i.id !== id)); toast('Removed from inventory'); };
   const addItem = (kind) => setInventory(prev => [...prev, { id: uid(), kind, name: '', qty: 0, countedAt: new Date().toISOString() }]);
+  // Mini light colors are added from a dropdown (or typed via "Other") and renamed from the row's details.
+  const addMiniColor = (choice) => {
+    if (!choice) return;
+    const name = choice === OTHER_COLOR ? (prompt('Mini light color') || '').trim() : choice;
+    if (!name) return;
+    if (itemsOf('mini').some(i => sameName(i.name, name))) { alert('That color is already in your inventory.'); return; }
+    setInventory(prev => [...prev, { id: uid(), kind: 'mini', name, qty: 0, countedAt: new Date().toISOString() }]);
+    toast(`${name} added. Type how many balls you have.`);
+  };
+  const renameMini = (item) => {
+    const name = (prompt('Rename this color', item.name) || '').trim();
+    if (!name || name === item.name) return;
+    if (itemsOf('mini').some(i => i.id !== item.id && sameName(i.name, name))) { alert('That color is already in your inventory.'); return; }
+    updateItem(item.id, { name });
+  };
 
   // Need rounds up: a job can't use a fraction of a foot of line.
   const need = (bucket) => bucket ? Math.max(0, Math.ceil(bucket.needed - 1e-6)) : 0;
@@ -1875,14 +1892,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
           <React.Fragment key={row.key}>
             <div className="inv-grid">
               {row.item ? (
-                <span className="inv-name-edit">
-                  <CommitInput type="text" list="inv-mini-colors" value={row.item.name} placeholder="Color" aria-label="Mini light color"
-                    onCommit={text => {
-                      if (miniItems.some(i => i.id !== row.item.id && sameName(i.name, text))) { alert('That color is already in your inventory.'); return false; }
-                      updateItem(row.item.id, { name: text.trim() });
-                    }} />
-                  <button className="icon-btn" onClick={() => setOpen(open === row.key ? null : row.key)} aria-label="Show jobs">{open === row.key ? '▾' : '▸'}</button>
-                </span>
+                <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.item.name || 'Unnamed color'} <span className="tech-meta">{open === row.key ? '▾' : '▸'}</span></span>
               ) : (
                 <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.name} <span className="tech-meta">{open === row.key ? '▾' : '▸'} on jobs, not in stock</span></span>
               )}
@@ -1893,13 +1903,19 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
             </div>
             {usesList(row, 'balls')}
             {row.item && open === row.key && (
-              <button className="btn btn-ghost btn-sm" style={{ color: 'var(--loss)', marginBottom: 8 }}
-                onClick={() => { if (confirm(`Remove ${row.name || 'this color'} from inventory?`)) removeItem(row.item.id); }}>Remove from inventory</button>
+              <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                <button className="btn btn-ghost btn-sm" onClick={() => renameMini(row.item)}>Rename</button>
+                <button className="btn btn-ghost btn-sm" style={{ color: 'var(--loss)' }}
+                  onClick={() => { if (confirm(`Remove ${row.name || 'this color'} from inventory?`)) removeItem(row.item.id); }}>Remove from inventory</button>
+              </div>
             )}
           </React.Fragment>
         ))}
-        <datalist id="inv-mini-colors">{MINI_LIGHT_COLORS.map(c => <option key={c} value={c} />)}</datalist>
-        <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => addItem('mini')}>+ Add color</button>
+        <select className="add-color" value="" aria-label="Add a mini light color" onChange={e => addMiniColor(e.target.value)}>
+          <option value="">+ Add a color…</option>
+          {MINI_LIGHT_COLORS.filter(c => !miniItems.some(i => sameName(i.name, c))).map(c => <option key={c} value={c}>{c}</option>)}
+          <option value={OTHER_COLOR}>Other (type it)…</option>
+        </select>
         <div className="hint">Matched to jobs by color name. Jobs count the actual balls used once entered, otherwise the estimate.</div>
       </div>
 
@@ -2216,6 +2232,26 @@ function JobsTab({ jobs, techs, settings, onAdd, onEdit, onDelete, onSetPayment 
   );
 }
 
+// Mini light color picker: a real dropdown, since phones barely show typed-suggestion lists,
+// with "Other (type it)" for a color that isn't listed. A saved color that isn't listed shows as text.
+const OTHER_COLOR = '__other__';
+function MiniColorSelect({ value, options, onChange }) {
+  const listed = options.find(o => sameName(o, value));
+  const [typing, setTyping] = useState(!!(value || '').trim() && !listed);
+  if (typing) {
+    return <input type="text" value={value} placeholder="Type a color" autoFocus={!value} aria-label="Mini light color"
+      onChange={e => onChange(e.target.value)} onBlur={() => { if (!(value || '').trim()) setTyping(false); }} />;
+  }
+  return (
+    <select value={listed || ''} aria-label="Mini light color"
+      onChange={e => { if (e.target.value === OTHER_COLOR) { setTyping(true); onChange(''); } else onChange(e.target.value); }}>
+      <option value="">Pick…</option>
+      {options.map(o => <option key={o} value={o}>{o}</option>)}
+      <option value={OTHER_COLOR}>Other (type it)</option>
+    </select>
+  );
+}
+
 function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
   const isNew = !job.id;
   const [customer, setCustomer] = useState(job.customer || '');
@@ -2478,8 +2514,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
           )}
           {miniLights.map(r => (
             <div className="mini-grid" key={r.id}>
-              <input type="text" list="mini-light-colors" value={r.color} placeholder="Color"
-                onChange={e => updateMini(r.id, { color: e.target.value })} aria-label="Mini light color" />
+              <MiniColorSelect value={r.color} options={miniColorOptions} onChange={color => updateMini(r.id, { color })} />
               <input type="number" inputMode="numeric" min="0" step="1" value={r.est} placeholder="0"
                 onChange={e => updateMini(r.id, { est: e.target.value })} aria-label="Estimated balls" />
               <input type="number" inputMode="numeric" min="0" step="1" value={r.actual} placeholder="—"
@@ -2487,7 +2522,6 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
               <button className="icon-btn danger" onClick={() => removeMini(r.id)} aria-label="Remove this color"><Icon name="close" /></button>
             </div>
           ))}
-          <datalist id="mini-light-colors">{miniColorOptions.map(c => <option key={c} value={c} />)}</datalist>
           <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={addMiniRow}>+ Add color</button>
         </div>
         {miniLights.length > 0 && (
