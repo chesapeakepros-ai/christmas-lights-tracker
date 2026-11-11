@@ -354,6 +354,7 @@
   .payout-job { padding: 10px 0; border-top: 1px dashed var(--border); font-size: 12.5px; color: var(--muted); line-height: 1.5; }
   .payout-job b { color: var(--text); }
   .payout-split { display: block; margin-top: 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .advance-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; cursor: pointer; }
   .icon-btn {
     display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 11px;
     background: none; border: none; cursor: pointer; color: var(--muted); font-size: 16px;
@@ -654,7 +655,9 @@ function migrate(data) {
     const typed = inventory.find(i => i.kind === 'other' && /^\s*timers?\s*$/i.test(i.name || ''));
     if (typed) inventory = inventory.map(i => i === typed ? { id: i.id, kind: 'timer', name: 'Timers', qty: Number(i.qty) || 0 } : i);
   }
-  return { ...data, techs, jobs, settings, inventory };
+  // Advances / deductions taken out of a tech's weekly payout: { id, techId, date, amount, note }.
+  const advances = Array.isArray(data.advances) ? data.advances : [];
+  return { ...data, techs, jobs, settings, inventory, advances };
 }
 
 // Commission used to be one % per job, split evenly between its techs; each tech now has
@@ -673,7 +676,7 @@ function perTechCommission(job, settings) {
 const pct2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 function loadData() {
-  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS }, inventory: [] };
+  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS }, inventory: [], advances: [] };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return migrate({ ...fallback, ...JSON.parse(raw) });
@@ -694,7 +697,7 @@ const TS_KEY = 'xmasLightsUpdatedAt';
 const BACKUP_KEY = 'xmasLightsBackups';
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
-const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length + (d.inventory || []).length;
+const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length + (d.inventory || []).length + (d.advances || []).length;
 const userDoc = (uid) => FB_DB.collection('users').doc(uid).collection('data').doc('xmasLights');
 
 // ---- Mock-up pictures ----
@@ -1115,23 +1118,27 @@ function tipByTech(job) {
   return out;
 }
 
-// Pay owed per pay week (commission plus tips): completed jobs, grouped by the week of their
-// scheduled (install) date. Newest week first.
-function weeklyPayouts(jobs, settings) {
+// Pay owed per pay week (commission plus tips, minus any advances): completed jobs, grouped by
+// the week of their scheduled (install) date, and advances by the week of their date. Newest week first.
+function weeklyPayouts(jobs, settings, advances) {
   const weeks = {};
+  const weekOf = (day) => {
+    const monday = weekStartOf(day);
+    const key = ymdOf(monday);
+    return weeks[key] || (weeks[key] = { key, monday, total: 0, tips: 0, advances: 0, byTech: {}, jobs: [], advanceList: [] });
+  };
+  const techOf = (week, techId) => week.byTech[techId] || (week.byTech[techId] = { techId, amount: 0, commission: 0, tips: 0, advances: 0, jobCount: 0 });
   jobs.forEach(job => {
     const day = scheduledOf(job);
     if (job.status !== 'Completed' || !day) return;
     const calc = computeJobFinancials(job, settings);
     if (!calc.techCount) return;
     const tips = tipByTech(job);
-    const monday = weekStartOf(day);
-    const key = ymdOf(monday);
-    const week = weeks[key] || (weeks[key] = { key, monday, total: 0, tips: 0, byTech: {}, jobs: [] });
+    const week = weekOf(day);
     week.jobs.push({ job, calc, owed: jobPayments(job).outstanding, tips });
     Object.entries(calc.payByTech).forEach(([techId, amount]) => {
       const tip = tips[techId] || 0;
-      const t = week.byTech[techId] || (week.byTech[techId] = { techId, amount: 0, commission: 0, tips: 0, jobCount: 0 });
+      const t = techOf(week, techId);
       t.commission += amount;
       t.tips += tip;
       t.amount += amount + tip;
@@ -1140,6 +1147,18 @@ function weeklyPayouts(jobs, settings) {
       week.tips += tip;
     });
   });
+  (advances || []).forEach(a => {
+    const amount = Number(a.amount) || 0;
+    if (!a.date || !a.techId || amount <= 0) return;
+    const week = weekOf(a.date);
+    week.advanceList.push(a);
+    const t = techOf(week, a.techId);
+    t.advances += amount;
+    t.amount -= amount;
+    week.advances += amount;
+    week.total -= amount;
+  });
+  Object.values(weeks).forEach(w => w.advanceList.sort((a, b) => a.date.localeCompare(b.date)));
   Object.values(weeks).forEach(w => w.jobs.sort((a, b) => scheduledOf(a.job).localeCompare(scheduledOf(b.job))));
   return Object.values(weeks).sort((a, b) => b.key.localeCompare(a.key));
 }
@@ -1263,10 +1282,12 @@ function App() {
   const [jobs, setJobs] = useState(initial.jobs);
   const [expenses, setExpenses] = useState(initial.expenses);
   const [inventory, setInventory] = useState(initial.inventory);
+  const [advances, setAdvances] = useState(initial.advances);
   const [settings, setSettings] = useState(initial.settings);
   const [tab, setTab] = useState('jobs');
 
   const [techModal, setTechModal] = useState(null); // null | {} | tech
+  const [advanceModal, setAdvanceModal] = useState(null); // null | {} | advance
   const [jobModal, setJobModal] = useState(null); // null | {} | job
   const [expenseModal, setExpenseModal] = useState(null); // null | {} | expense
 
@@ -1284,7 +1305,7 @@ function App() {
   const firstRun = useRef(true);
   const localUpdatedAt = useRef(Number(lsGet(TS_KEY, 0)) || 0);
   userRef.current = user;
-  dataRef.current = { techs, jobs, expenses, settings, inventory };
+  dataRef.current = { techs, jobs, expenses, settings, inventory, advances };
 
   const doCloudSave = (uid, contentJson, ts) => {
     clearTimeout(retryTimer.current);
@@ -1318,11 +1339,13 @@ function App() {
           expenses: d.expenses || [],
           settings: d.settings || {},
           inventory: d.inventory,
+          advances: d.advances,
         });
         // A copy saved by a version from before the Inventory tab has no `inventory` field at
         // all. Adopting it must not wipe this device's inventory: keep ours, and the save that
-        // follows puts it back in the cloud.
+        // follows puts it back in the cloud. Same for advances, which came later still.
         const cloudKnowsInventory = Array.isArray(d.inventory);
+        const cloudKnowsAdvances = Array.isArray(d.advances);
         const incomingJSON = JSON.stringify(incoming);
         if (incomingJSON === lastCloudJSON.current) return;
 
@@ -1348,6 +1371,7 @@ function App() {
           setExpenses(incoming.expenses);
           setSettings(incoming.settings);
           setInventory(cloudKnowsInventory ? incoming.inventory : local.inventory);
+          setAdvances(cloudKnowsAdvances ? incoming.advances : local.advances);
         } else if (!isSaving.current) {
           doCloudSave(uid, JSON.stringify(local), Math.max(localTs, cloudTs) + 1);
         }
@@ -1376,7 +1400,7 @@ function App() {
   // Runs only when the data itself changes (not on sign-in), so a stale device is never
   // mistaken for the newest copy just because someone signed in on it.
   useEffect(() => {
-    const data = { techs, jobs, expenses, settings, inventory };
+    const data = { techs, jobs, expenses, settings, inventory, advances };
     saveData(data);
     const json = JSON.stringify(data);
     if (json === lastCloudJSON.current) return;
@@ -1389,7 +1413,7 @@ function App() {
       return;
     }
     doCloudSave(userRef.current.uid, json, ts);
-  }, [techs, jobs, expenses, settings, inventory]);
+  }, [techs, jobs, expenses, settings, inventory, advances]);
 
   const signIn = () => {
     setAuthError('');
@@ -1414,13 +1438,15 @@ function App() {
       expenses: Array.isArray(raw.expenses) ? raw.expenses : [],
       settings: raw.settings || {},
       inventory: raw.inventory,
+      advances: raw.advances,
     });
     setTechs(d.techs);
     setJobs(d.jobs);
     setExpenses(d.expenses);
     setSettings(d.settings);
-    // A backup from before the Inventory tab has no inventory; keep the current one then.
+    // A backup from before the Inventory tab (or advances) has none; keep the current ones then.
     if (Array.isArray(raw.inventory)) setInventory(d.inventory);
+    if (Array.isArray(raw.advances)) setAdvances(d.advances);
     toast('Backup restored');
   };
 
@@ -1435,7 +1461,8 @@ function App() {
   // so past payouts and everyone else's share of those jobs never change. A tech with
   // completed work stays on record (hidden from the roster) so their name still shows.
   const deleteTech = (id) => {
-    const hasHistory = jobs.some(j => j.status === 'Completed' && (j.assignments || []).some(a => a.techId === id));
+    const hasHistory = jobs.some(j => j.status === 'Completed' && (j.assignments || []).some(a => a.techId === id))
+      || advances.some(a => a.techId === id);
     setTechs(prev => hasHistory ? prev.map(t => t.id === id ? { ...t, removed: true } : t) : prev.filter(t => t.id !== id));
     setJobs(prev => prev.map(j => j.status === 'Completed' ? j
       : { ...j, assignments: (j.assignments || []).filter(a => a.techId !== id) }));
@@ -1471,6 +1498,12 @@ function App() {
     });
   };
   const deleteExpense = (id) => { setExpenses(prev => prev.filter(e => e.id !== id)); toast('Expense deleted'); };
+
+  const upsertAdvance = (a) => {
+    toast(advances.some(x => x.id === a.id) ? 'Advance saved' : 'Advance added');
+    setAdvances(prev => prev.some(x => x.id === a.id) ? prev.map(x => x.id === a.id ? a : x) : [...prev, a]);
+  };
+  const deleteAdvance = (id) => { setAdvances(prev => prev.filter(a => a.id !== id)); toast('Advance deleted'); };
 
   // Page titles, a one-line summary for each tab, and tab switching that starts at the top.
   const goTab = (id) => { setTab(id); window.scrollTo(0, 0); };
@@ -1525,10 +1558,12 @@ function App() {
           <InventoryTab jobs={jobs} inventory={inventory} setInventory={setInventory} settings={settings} setSettings={setSettings} onEditJob={(j) => setJobModal(j)} />
         )}
         {tab === 'techs' && (
-          <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings}
+          <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings} advances={advances}
             onAdd={() => setTechModal({})}
             onEdit={(t) => setTechModal(t)}
-            onDelete={deleteTech} />
+            onDelete={deleteTech}
+            onAddAdvance={() => setAdvanceModal({})}
+            onEditAdvance={(a) => setAdvanceModal(a)} />
         )}
         {tab === 'expenses' && (
           <ExpensesTab expenses={expenses}
@@ -1545,7 +1580,7 @@ function App() {
             onEditTech={(t) => setTechModal(t)} onDeleteTech={deleteTech}
             jobs={jobs} onEditJob={(j) => setJobModal(j)} onDeleteJob={deleteJob}
             expenses={expenses} onEditExpense={(e) => setExpenseModal(e)} onDeleteExpense={deleteExpense}
-            inventory={inventory}
+            inventory={inventory} advances={advances}
             user={user} syncState={syncState} authError={authError} signIn={signIn} signOut={signOut} onImport={importData} />
         )}
         </div>
@@ -1587,6 +1622,11 @@ function App() {
       {expenseModal && (
         <ExpenseModal expense={expenseModal} onClose={() => setExpenseModal(null)}
           onSave={(e) => { upsertExpense(e); setExpenseModal(null); }} />
+      )}
+      {advanceModal && (
+        <AdvanceModal advance={advanceModal} techs={techs} onClose={() => setAdvanceModal(null)}
+          onSave={(a) => { upsertAdvance(a); setAdvanceModal(null); }}
+          onDelete={(id) => { deleteAdvance(id); setAdvanceModal(null); }} />
       )}
     </React.Fragment>
   );
@@ -1939,8 +1979,8 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
 }
 
 // ================= Techs =================
-function WeeklyPayouts({ jobs, allTechs, settings }) {
-  const weeks = useMemo(() => weeklyPayouts(jobs, settings), [jobs, settings]);
+function WeeklyPayouts({ jobs, allTechs, settings, advances, onAddAdvance, onEditAdvance }) {
+  const weeks = useMemo(() => weeklyPayouts(jobs, settings, advances), [jobs, settings, advances]);
   const [openWeeks, setOpenWeeks] = useState({});
   const thisWeek = ymdOf(weekStartOf(todayYMD()));
   const nameOf = (id) => (allTechs.find(t => t.id === id) || {}).name || 'Former tech';
@@ -1950,9 +1990,13 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
 
   return (
     <div>
-      <div className="section-title" style={{ marginTop: 6 }}>Weekly Payouts</div>
+      <div className="row" style={{ marginTop: 6, marginBottom: 6 }}>
+        <div className="section-title" style={{ marginBottom: 0 }}>Weekly Payouts</div>
+        <button className="btn btn-ghost btn-sm" onClick={onAddAdvance}>− Advance / deduction</button>
+      </div>
       <div className="hint" style={{ marginBottom: 10 }}>
         Commission and customer tips owed from completed jobs, grouped by the week of each job's scheduled date (Monday–Sunday).
+        Advances and other deductions come out of the week they're dated.
       </div>
       {strandedTips.length > 0 && (
         <div className="card" style={{ padding: '10px 14px', color: 'var(--loss)', fontSize: 13, fontWeight: 600 }}>
@@ -1975,15 +2019,20 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
               </div>
               <div style={{ textAlign: 'right' }}>
                 <div style={{ fontWeight: 800, fontSize: 17 }}>{fmtMoney2(w.total)}</div>
-                <div className="tech-meta">total payout{w.tips > 0 ? ` · incl. ${fmtMoney2(w.tips)} tips` : ''}</div>
+                <div className="tech-meta">total payout{w.tips > 0 ? ` · incl. ${fmtMoney2(w.tips)} tips` : ''}{w.advances > 0 ? ` · −${fmtMoney2(w.advances)} advances` : ''}</div>
               </div>
             </div>
             {Object.values(w.byTech).sort((a, b) => b.amount - a.amount).map(t => (
               <div className="payout-row" key={t.techId}>
-                <span><b>{nameOf(t.techId)}</b> <span className="tech-meta">· {t.jobCount} {t.jobCount === 1 ? 'job' : 'jobs'}</span>
-                  {t.tips > 0 && <span className="payout-split">{fmtMoney2(t.commission)} commission + 🎁 {fmtMoney2(t.tips)} tips</span>}
+                <span><b>{nameOf(t.techId)}</b> <span className="tech-meta">· {t.jobCount ? `${t.jobCount} ${t.jobCount === 1 ? 'job' : 'jobs'}` : 'no jobs'}</span>
+                  {(t.tips > 0 || t.advances > 0) && (
+                    <span className="payout-split">
+                      {fmtMoney2(t.commission)} commission{t.tips > 0 ? ` + 🎁 ${fmtMoney2(t.tips)} tips` : ''}{t.advances > 0 ? ` − 💵 ${fmtMoney2(t.advances)} advance` : ''}
+                    </span>
+                  )}
+                  {t.amount < 0 && <span className="payout-split" style={{ color: 'var(--loss)' }}>Advance is more than this week’s pay.</span>}
                 </span>
-                <span style={{ fontWeight: 800, color: 'var(--profit)' }}>{fmtMoney2(t.amount)}</span>
+                <span style={{ fontWeight: 800, color: t.amount < 0 ? 'var(--loss)' : 'var(--profit)' }}>{fmtMoney2(t.amount)}</span>
               </div>
             ))}
             {owedJobs > 0 && (
@@ -1992,10 +2041,19 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
               </div>
             )}
             <button className="btn btn-ghost btn-sm" style={{ marginTop: 10 }} onClick={() => toggle(w.key)}>
-              {openWeeks[w.key] ? 'Hide jobs' : `Show ${w.jobs.length} ${w.jobs.length === 1 ? 'job' : 'jobs'}`}
+              {openWeeks[w.key] ? 'Hide details' : 'Show ' + [
+                w.jobs.length ? `${w.jobs.length} ${w.jobs.length === 1 ? 'job' : 'jobs'}` : '',
+                w.advanceList.length ? `${w.advanceList.length} ${w.advanceList.length === 1 ? 'advance' : 'advances'}` : '',
+              ].filter(Boolean).join(' & ')}
             </button>
             {openWeeks[w.key] && (
               <div style={{ marginTop: 8 }}>
+                {w.advanceList.map(a => (
+                  <div className="payout-job advance-line" key={a.id} onClick={() => onEditAdvance(a)}>
+                    <span>💵 <b>{nameOf(a.techId)}</b> · {fmtDateOnly(a.date)}{a.note ? ` · ${a.note}` : ''}</span>
+                    <b style={{ color: 'var(--loss)' }}>−{fmtMoney2(a.amount)}</b>
+                  </div>
+                ))}
                 {w.jobs.map(({ job, calc, owed, tips }) => (
                   <div className="payout-job" key={job.id}>
                     <b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))}
@@ -2018,7 +2076,7 @@ function WeeklyPayouts({ jobs, allTechs, settings }) {
 
 const initialsOf = (name) => (name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
 
-function TechsTab({ techs, allTechs, jobs, settings, onAdd, onEdit, onDelete }) {
+function TechsTab({ techs, allTechs, jobs, settings, advances, onAdd, onEdit, onDelete, onAddAdvance, onEditAdvance }) {
   return (
     <div className="techs-layout">
       <div className="card">
@@ -2048,7 +2106,8 @@ function TechsTab({ techs, allTechs, jobs, settings, onAdd, onEdit, onDelete }) 
         ))}
       </div>
 
-      <WeeklyPayouts jobs={jobs} allTechs={allTechs} settings={settings} />
+      <WeeklyPayouts jobs={jobs} allTechs={allTechs} settings={settings} advances={advances}
+        onAddAdvance={onAddAdvance} onEditAdvance={onEditAdvance} />
     </div>
   );
 }
@@ -2077,6 +2136,54 @@ function TechModal({ tech, onClose, onSave }) {
         <div className="hint" style={{ marginTop: 10 }}>
           Techs earn a commission % of each job they work, plus an even share of any customer tip on it. You set each tech's % on the job; new jobs start with your default from Settings, split evenly.
         </div>
+      </div>
+    </Sheet>
+  );
+}
+
+// An advance (or any other deduction) for one tech, taken out of their payout for the week it's dated.
+function AdvanceModal({ advance, techs, onClose, onSave, onDelete }) {
+  const isNew = !advance.id;
+  const pickable = techs.filter(t => !t.removed || t.id === advance.techId);
+  const [techId, setTechId] = useState(advance.techId || (pickable.length === 1 ? pickable[0].id : ''));
+  const [amount, setAmount] = useState(advance.amount != null ? String(advance.amount) : '');
+  const [date, setDate] = useState(advance.date || todayYMD());
+  const [note, setNote] = useState(advance.note || '');
+  const save = () => {
+    if (!techId) { alert('Pick which tech this is for.'); return; }
+    if (amount === '' || isNaN(Number(amount)) || Number(amount) <= 0) { alert('Enter an amount more than $0.'); return; }
+    if (!date) { alert('Pick a date.'); return; }
+    onSave({ id: advance.id || uid(), techId, date, amount: Number(amount), note: note.trim() });
+  };
+
+  return (
+    <Sheet title={isNew ? 'Advance / Deduction' : 'Edit Advance'} onClose={onClose}
+      footer={(close) => (
+        <React.Fragment>
+          {!isNew && (
+            <button className="btn btn-ghost" style={{ color: 'var(--loss)' }}
+              onClick={() => { if (confirm('Delete this advance? It will stop coming out of their pay.')) onDelete(advance.id); }}>Delete</button>
+          )}
+          <button className="btn btn-ghost" onClick={close}>Cancel</button>
+          <button className="btn btn-primary" onClick={save}>Save</button>
+        </React.Fragment>
+      )}>
+      <div className="form-section">
+        <label>Tech</label>
+        <select value={techId} onChange={e => setTechId(e.target.value)} aria-label="Tech">
+          <option value="">Pick a tech…</option>
+          {pickable.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+
+        <label>Amount ($)</label>
+        <input type="number" inputMode="decimal" min="0" step="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" autoFocus={isNew} />
+
+        <label>Date</label>
+        <input type="date" value={date} onChange={e => setDate(e.target.value)} />
+        {date && <div className="hint">Comes out of their payout for the week of <b>{fmtWeekRange(weekStartOf(date))}</b>.</div>}
+
+        <label>Note (optional)</label>
+        <input type="text" value={note} onChange={e => setNote(e.target.value)} placeholder="e.g. Advance, gas money" />
       </div>
     </Sheet>
   );
@@ -2984,7 +3091,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 }
 
 // ================= Settings =================
-function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, user, syncState, authError, signIn, signOut, onImport }) {
+function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, advances, user, syncState, authError, signIn, signOut, onImport }) {
   const [themePref, setThemePref] = useState(getThemePref());
   const [commStr, setCommStr] = useState(String(settings.commissionPct));
   const [feeStr, setFeeStr] = useState(String(settings.cardFeePct));
@@ -3026,7 +3133,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
 
   const [importMsg, setImportMsg] = useState('');
   const exportBackup = () => {
-    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings, inventory };
+    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings, inventory, advances };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
