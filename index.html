@@ -355,6 +355,14 @@
   .payout-job b { color: var(--text); }
   .payout-split { display: block; margin-top: 2px; font-size: 12px; font-weight: 600; color: var(--muted); }
   .advance-line { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; cursor: pointer; }
+  .payout-amt { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; flex: 0 0 auto; }
+  .paid-btn {
+    padding: 6px 11px; border-radius: 10px; border: 1.5px solid var(--border-strong); background: transparent;
+    font-size: 12px; font-weight: 800; color: var(--muted); cursor: pointer; white-space: nowrap; transition: background .2s, color .2s, border-color .2s, transform .15s;
+  }
+  .paid-btn:active { transform: scale(.95); }
+  .paid-btn.on { background: var(--profit-soft); border-color: transparent; color: var(--profit); }
+  .paid-btn.warn { background: var(--loss-soft); border-color: transparent; color: var(--loss); }
   .icon-btn {
     display: inline-grid; place-items: center; width: 36px; height: 36px; border-radius: 11px;
     background: none; border: none; cursor: pointer; color: var(--muted); font-size: 16px;
@@ -657,7 +665,9 @@ function migrate(data) {
   }
   // Advances / deductions taken out of a tech's weekly payout: { id, techId, date, amount, note }.
   const advances = Array.isArray(data.advances) ? data.advances : [];
-  return { ...data, techs, jobs, settings, inventory, advances };
+  // Weeks marked paid, per tech: { id, weekKey (that Monday), techId, amount paid, paidAt }.
+  const paidWeeks = Array.isArray(data.paidWeeks) ? data.paidWeeks : [];
+  return { ...data, techs, jobs, settings, inventory, advances, paidWeeks };
 }
 
 // Commission used to be one % per job, split evenly between its techs; each tech now has
@@ -676,7 +686,7 @@ function perTechCommission(job, settings) {
 const pct2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 function loadData() {
-  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS }, inventory: [], advances: [] };
+  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS }, inventory: [], advances: [], paidWeeks: [] };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return migrate({ ...fallback, ...JSON.parse(raw) });
@@ -697,7 +707,7 @@ const TS_KEY = 'xmasLightsUpdatedAt';
 const BACKUP_KEY = 'xmasLightsBackups';
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
-const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length + (d.inventory || []).length + (d.advances || []).length;
+const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length + (d.inventory || []).length + (d.advances || []).length + (d.paidWeeks || []).length;
 const userDoc = (uid) => FB_DB.collection('users').doc(uid).collection('data').doc('xmasLights');
 
 // ---- Mock-up pictures ----
@@ -1283,6 +1293,7 @@ function App() {
   const [expenses, setExpenses] = useState(initial.expenses);
   const [inventory, setInventory] = useState(initial.inventory);
   const [advances, setAdvances] = useState(initial.advances);
+  const [paidWeeks, setPaidWeeks] = useState(initial.paidWeeks);
   const [settings, setSettings] = useState(initial.settings);
   const [tab, setTab] = useState('jobs');
 
@@ -1305,7 +1316,7 @@ function App() {
   const firstRun = useRef(true);
   const localUpdatedAt = useRef(Number(lsGet(TS_KEY, 0)) || 0);
   userRef.current = user;
-  dataRef.current = { techs, jobs, expenses, settings, inventory, advances };
+  dataRef.current = { techs, jobs, expenses, settings, inventory, advances, paidWeeks };
 
   const doCloudSave = (uid, contentJson, ts) => {
     clearTimeout(retryTimer.current);
@@ -1340,12 +1351,14 @@ function App() {
           settings: d.settings || {},
           inventory: d.inventory,
           advances: d.advances,
+          paidWeeks: d.paidWeeks,
         });
         // A copy saved by a version from before the Inventory tab has no `inventory` field at
         // all. Adopting it must not wipe this device's inventory: keep ours, and the save that
-        // follows puts it back in the cloud. Same for advances, which came later still.
+        // follows puts it back in the cloud. Same for advances and paid weeks, which came later still.
         const cloudKnowsInventory = Array.isArray(d.inventory);
         const cloudKnowsAdvances = Array.isArray(d.advances);
+        const cloudKnowsPaidWeeks = Array.isArray(d.paidWeeks);
         const incomingJSON = JSON.stringify(incoming);
         if (incomingJSON === lastCloudJSON.current) return;
 
@@ -1372,6 +1385,7 @@ function App() {
           setSettings(incoming.settings);
           setInventory(cloudKnowsInventory ? incoming.inventory : local.inventory);
           setAdvances(cloudKnowsAdvances ? incoming.advances : local.advances);
+          setPaidWeeks(cloudKnowsPaidWeeks ? incoming.paidWeeks : local.paidWeeks);
         } else if (!isSaving.current) {
           doCloudSave(uid, JSON.stringify(local), Math.max(localTs, cloudTs) + 1);
         }
@@ -1400,7 +1414,7 @@ function App() {
   // Runs only when the data itself changes (not on sign-in), so a stale device is never
   // mistaken for the newest copy just because someone signed in on it.
   useEffect(() => {
-    const data = { techs, jobs, expenses, settings, inventory, advances };
+    const data = { techs, jobs, expenses, settings, inventory, advances, paidWeeks };
     saveData(data);
     const json = JSON.stringify(data);
     if (json === lastCloudJSON.current) return;
@@ -1413,7 +1427,7 @@ function App() {
       return;
     }
     doCloudSave(userRef.current.uid, json, ts);
-  }, [techs, jobs, expenses, settings, inventory, advances]);
+  }, [techs, jobs, expenses, settings, inventory, advances, paidWeeks]);
 
   const signIn = () => {
     setAuthError('');
@@ -1439,14 +1453,16 @@ function App() {
       settings: raw.settings || {},
       inventory: raw.inventory,
       advances: raw.advances,
+      paidWeeks: raw.paidWeeks,
     });
     setTechs(d.techs);
     setJobs(d.jobs);
     setExpenses(d.expenses);
     setSettings(d.settings);
-    // A backup from before the Inventory tab (or advances) has none; keep the current ones then.
+    // A backup from before the Inventory tab (or advances, or paid weeks) has none; keep the current ones then.
     if (Array.isArray(raw.inventory)) setInventory(d.inventory);
     if (Array.isArray(raw.advances)) setAdvances(d.advances);
+    if (Array.isArray(raw.paidWeeks)) setPaidWeeks(d.paidWeeks);
     toast('Backup restored');
   };
 
@@ -1462,7 +1478,7 @@ function App() {
   // completed work stays on record (hidden from the roster) so their name still shows.
   const deleteTech = (id) => {
     const hasHistory = jobs.some(j => j.status === 'Completed' && (j.assignments || []).some(a => a.techId === id))
-      || advances.some(a => a.techId === id);
+      || advances.some(a => a.techId === id) || paidWeeks.some(p => p.techId === id);
     setTechs(prev => hasHistory ? prev.map(t => t.id === id ? { ...t, removed: true } : t) : prev.filter(t => t.id !== id));
     setJobs(prev => prev.map(j => j.status === 'Completed' ? j
       : { ...j, assignments: (j.assignments || []).filter(a => a.techId !== id) }));
@@ -1504,6 +1520,17 @@ function App() {
     setAdvances(prev => prev.some(x => x.id === a.id) ? prev.map(x => x.id === a.id ? a : x) : [...prev, a]);
   };
   const deleteAdvance = (id) => { setAdvances(prev => prev.filter(a => a.id !== id)); toast('Advance deleted'); };
+
+  // Mark techs paid (or not) for a pay week. The amount at that moment is saved with it, so a
+  // later change to that week (an edited job, a new advance) shows up as a difference to settle.
+  const setWeekPaid = (weekKey, list, paid, message) => {
+    const paidAt = new Date().toISOString();
+    setPaidWeeks(prev => {
+      const rest = prev.filter(p => !(p.weekKey === weekKey && list.some(x => x.techId === p.techId)));
+      return paid ? [...rest, ...list.map(x => ({ id: uid(), weekKey, techId: x.techId, amount: Math.round(x.amount * 100) / 100, paidAt }))] : rest;
+    });
+    toast(message);
+  };
 
   // Page titles, a one-line summary for each tab, and tab switching that starts at the top.
   const goTab = (id) => { setTab(id); window.scrollTo(0, 0); };
@@ -1558,7 +1585,8 @@ function App() {
           <InventoryTab jobs={jobs} inventory={inventory} setInventory={setInventory} settings={settings} setSettings={setSettings} onEditJob={(j) => setJobModal(j)} />
         )}
         {tab === 'techs' && (
-          <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings} advances={advances}
+          <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings} advances={advances} paidWeeks={paidWeeks}
+            onSetPaid={setWeekPaid}
             onAdd={() => setTechModal({})}
             onEdit={(t) => setTechModal(t)}
             onDelete={deleteTech}
@@ -1580,7 +1608,7 @@ function App() {
             onEditTech={(t) => setTechModal(t)} onDeleteTech={deleteTech}
             jobs={jobs} onEditJob={(j) => setJobModal(j)} onDeleteJob={deleteJob}
             expenses={expenses} onEditExpense={(e) => setExpenseModal(e)} onDeleteExpense={deleteExpense}
-            inventory={inventory} advances={advances}
+            inventory={inventory} advances={advances} paidWeeks={paidWeeks}
             user={user} syncState={syncState} authError={authError} signIn={signIn} signOut={signOut} onImport={importData} />
         )}
         </div>
@@ -1979,11 +2007,21 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
 }
 
 // ================= Techs =================
-function WeeklyPayouts({ jobs, allTechs, settings, advances, onAddAdvance, onEditAdvance }) {
+function WeeklyPayouts({ jobs, allTechs, settings, advances, paidWeeks, onAddAdvance, onEditAdvance, onSetPaid }) {
   const weeks = useMemo(() => weeklyPayouts(jobs, settings, advances), [jobs, settings, advances]);
   const [openWeeks, setOpenWeeks] = useState({});
   const thisWeek = ymdOf(weekStartOf(todayYMD()));
   const nameOf = (id) => (allTechs.find(t => t.id === id) || {}).name || 'Former tech';
+  // A tech's pay for a week, once marked paid: when, and how much it was then (to catch later changes).
+  const paidOf = (weekKey, techId) => (paidWeeks || []).find(p => p.weekKey === weekKey && p.techId === techId);
+  const changedSincePaid = (paid, t) => paid && Math.abs((Number(paid.amount) || 0) - t.amount) >= 0.005;
+  const fmtPaidDay = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const weekLabel = (w) => w.key === thisWeek ? 'this week' : 'week of ' + w.monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const togglePaid = (w, t) => {
+    const paid = paidOf(w.key, t.techId);
+    if (paid && !confirm(`Mark ${nameOf(t.techId)} as NOT paid for the ${weekLabel(w)}?`)) return;
+    onSetPaid(w.key, [{ techId: t.techId, amount: t.amount }], !paid, `${nameOf(t.techId)} ${paid ? 'marked not paid' : 'marked paid'} for the ${weekLabel(w)}`);
+  };
   const toggle = (key) => setOpenWeeks(o => ({ ...o, [key]: !o[key] }));
   // Tips on completed jobs with nobody assigned can't be paid out; flag them so they aren't lost.
   const strandedTips = jobs.filter(j => j.status === 'Completed' && tipOf(j) > 0 && !(j.assignments || []).length);
@@ -2010,11 +2048,17 @@ function WeeklyPayouts({ jobs, allTechs, settings, advances, onAddAdvance, onEdi
         </div></div>
       ) : weeks.map(w => {
         const owedJobs = w.jobs.filter(j => j.owed > 0).length;
+        const crew = Object.values(w.byTech);
+        const unpaid = crew.filter(t => !paidOf(w.key, t.techId));
+        const allPaid = unpaid.length === 0 && !crew.some(t => changedSincePaid(paidOf(w.key, t.techId), t));
         return (
           <div className="card" key={w.key}>
             <div className="row" style={{ marginBottom: 4 }}>
               <div>
-                <div className="tech-name">{w.key === thisWeek ? 'This week' : 'Week of ' + w.monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
+                <div className="tech-name">
+                  {w.key === thisWeek ? 'This week' : 'Week of ' + w.monday.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                  {allPaid && <span className="badge badge-paid" style={{ marginLeft: 8, verticalAlign: 2 }}>All paid</span>}
+                </div>
                 <div className="tech-meta">{fmtWeekRange(w.monday)}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
@@ -2022,7 +2066,10 @@ function WeeklyPayouts({ jobs, allTechs, settings, advances, onAddAdvance, onEdi
                 <div className="tech-meta">total payout{w.tips > 0 ? ` · incl. ${fmtMoney2(w.tips)} tips` : ''}{w.advances > 0 ? ` · −${fmtMoney2(w.advances)} advances` : ''}</div>
               </div>
             </div>
-            {Object.values(w.byTech).sort((a, b) => b.amount - a.amount).map(t => (
+            {crew.sort((a, b) => b.amount - a.amount).map(t => {
+              const paid = paidOf(w.key, t.techId);
+              const changed = changedSincePaid(paid, t);
+              return (
               <div className="payout-row" key={t.techId}>
                 <span><b>{nameOf(t.techId)}</b> <span className="tech-meta">· {t.jobCount ? `${t.jobCount} ${t.jobCount === 1 ? 'job' : 'jobs'}` : 'no jobs'}</span>
                   {(t.tips > 0 || t.advances > 0) && (
@@ -2031,10 +2078,31 @@ function WeeklyPayouts({ jobs, allTechs, settings, advances, onAddAdvance, onEdi
                     </span>
                   )}
                   {t.amount < 0 && <span className="payout-split" style={{ color: 'var(--loss)' }}>Advance is more than this week’s pay.</span>}
+                  {paid && !changed && <span className="payout-split" style={{ color: 'var(--profit)' }}>✓ Paid {fmtPaidDay(paid.paidAt)}</span>}
+                  {changed && (
+                    <span className="payout-split" style={{ color: 'var(--loss)' }}>
+                      ⚠ Paid {fmtMoney2(paid.amount)} on {fmtPaidDay(paid.paidAt)}, but it’s now {fmtMoney2(t.amount)} ({t.amount > paid.amount ? 'still owe ' : 'overpaid '}{fmtMoney2(Math.abs(t.amount - paid.amount))}). Tap Paid again once it’s settled.
+                    </span>
+                  )}
                 </span>
-                <span style={{ fontWeight: 800, color: t.amount < 0 ? 'var(--loss)' : 'var(--profit)' }}>{fmtMoney2(t.amount)}</span>
+                <span className="payout-amt">
+                  <span style={{ fontWeight: 800, color: t.amount < 0 ? 'var(--loss)' : 'var(--profit)' }}>{fmtMoney2(t.amount)}</span>
+                  <button className={'paid-btn' + (paid ? (changed ? ' warn' : ' on') : '')}
+                    onClick={() => changed
+                      ? onSetPaid(w.key, [{ techId: t.techId, amount: t.amount }], true, `${nameOf(t.techId)} marked paid ${fmtMoney2(t.amount)}`)
+                      : togglePaid(w, t)}>
+                    {paid ? (changed ? 'Settle up' : '✓ Paid') : 'Mark paid'}
+                  </button>
+                </span>
               </div>
-            ))}
+              );
+            })}
+            {crew.length > 1 && unpaid.length > 1 && (
+              <button className="btn btn-ghost btn-sm" style={{ marginTop: 10, marginRight: 8 }}
+                onClick={() => onSetPaid(w.key, unpaid.map(t => ({ techId: t.techId, amount: t.amount })), true, `Everyone marked paid for the ${weekLabel(w)}`)}>
+                ✓ Mark all paid
+              </button>
+            )}
             {owedJobs > 0 && (
               <div className="hint" style={{ color: 'var(--loss)', marginTop: 6 }}>
                 ⚠ {owedJobs} {owedJobs === 1 ? 'job this week still has' : 'jobs this week still have'} money owed by the customer.
@@ -2076,7 +2144,7 @@ function WeeklyPayouts({ jobs, allTechs, settings, advances, onAddAdvance, onEdi
 
 const initialsOf = (name) => (name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase();
 
-function TechsTab({ techs, allTechs, jobs, settings, advances, onAdd, onEdit, onDelete, onAddAdvance, onEditAdvance }) {
+function TechsTab({ techs, allTechs, jobs, settings, advances, paidWeeks, onAdd, onEdit, onDelete, onAddAdvance, onEditAdvance, onSetPaid }) {
   return (
     <div className="techs-layout">
       <div className="card">
@@ -2106,8 +2174,8 @@ function TechsTab({ techs, allTechs, jobs, settings, advances, onAdd, onEdit, on
         ))}
       </div>
 
-      <WeeklyPayouts jobs={jobs} allTechs={allTechs} settings={settings} advances={advances}
-        onAddAdvance={onAddAdvance} onEditAdvance={onEditAdvance} />
+      <WeeklyPayouts jobs={jobs} allTechs={allTechs} settings={settings} advances={advances} paidWeeks={paidWeeks}
+        onAddAdvance={onAddAdvance} onEditAdvance={onEditAdvance} onSetPaid={onSetPaid} />
     </div>
   );
 }
@@ -3091,7 +3159,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 }
 
 // ================= Settings =================
-function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, advances, user, syncState, authError, signIn, signOut, onImport }) {
+function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, advances, paidWeeks, user, syncState, authError, signIn, signOut, onImport }) {
   const [themePref, setThemePref] = useState(getThemePref());
   const [commStr, setCommStr] = useState(String(settings.commissionPct));
   const [feeStr, setFeeStr] = useState(String(settings.cardFeePct));
@@ -3133,7 +3201,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
 
   const [importMsg, setImportMsg] = useState('');
   const exportBackup = () => {
-    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings, inventory, advances };
+    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings, inventory, advances, paidWeeks };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
