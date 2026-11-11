@@ -381,6 +381,7 @@
   .color-grid .color-pill:nth-child(2)::after { background: repeating-linear-gradient(90deg, #e53935 0 10px, #ffffff 10px 20px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
   .color-grid .color-pill:nth-child(3)::after { background: repeating-linear-gradient(90deg, #e53935 0 10px, #2fbf71 10px 20px, #ffffff 20px 30px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
   .color-grid .color-pill:nth-child(4)::after { background: linear-gradient(90deg, #e53935, #ffb703, #2fbf71, #3d8bfd, #b05cff); }
+  .color-grid .color-pill:nth-child(5)::after { background: repeating-linear-gradient(90deg, #2f6fed 0 10px, #ffffff 10px 20px); box-shadow: inset 0 0 0 1px rgba(0,0,0,.08); }
 
   .tech-pct { display: flex; align-items: center; gap: 5px; }
   .checkbox-row input.pct-input { width: 70px; padding: 8px 9px; font-size: 15px; text-align: right; }
@@ -906,12 +907,13 @@ const MINI_LIGHT_COLORS = ['Warm White', 'Cool White', 'Multicolor', 'Red', 'Gre
 // Roofline is stocked as line (feet, socketed every `bulbSpacingIn` inches) plus bulbs counted
 // per base color. A job uses its feet of line, and one bulb per socket. Its roofline color is a
 // pattern repeated along the line, so the bulbs are dealt out across the pattern's colors in order.
-const ROOFLINE_BASE_COLORS = ['Warm White', 'Pure White', 'Red', 'Green', 'Multicolor'];
+const ROOFLINE_BASE_COLORS = ['Warm White', 'Pure White', 'Red', 'Green', 'Blue', 'Multicolor'];
 const ROOFLINE_PATTERNS = {
   'Warm White': ['Warm White'],
   'Candy Cane': ['Red', 'Pure White'],
   'Classic Christmas': ['Red', 'Green', 'Pure White'],
   'Multicolor': ['Multicolor'],
+  'Blue & White': ['Blue', 'Pure White'],
 };
 const spacingOf = (settings) => Number(settings.bulbSpacingIn) || 15;
 // Sockets (= bulbs) on `feet` of line, rounded up so every socket gets a bulb.
@@ -927,6 +929,7 @@ const ROOFLINE_PATTERN_HINTS = {
   'Candy Cane': 'red & pure white',
   'Classic Christmas': 'red, green & pure white',
   'Multicolor': 'multicolor',
+  'Blue & White': 'blue & pure white',
 };
 // Inventory items: { id, kind: 'line' | 'bulb' | 'timer' | 'clip' | 'mini' | 'other', name, qty, note, countedAt }.
 // qty is the shelf count as of countedAt (when it was typed in).
@@ -1835,7 +1838,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         ))}
         <div className="hint">
           Your line has a bulb every {spacing}″, so each foot takes {pct2(12 / spacing)} bulbs ({fmtQty(socketsFor(100, settings))} bulbs per 100 ft).
-          Candy Cane alternates Red and Pure White; Classic Christmas repeats Red, Green, Pure White. Tap a color to see the jobs using it.
+          Candy Cane alternates Red and Pure White; Blue &amp; White alternates Blue and Pure White; Classic Christmas repeats Red, Green, Pure White. Tap a color to see the jobs using it.
         </div>
       </div>
 
