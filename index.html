@@ -953,17 +953,10 @@ const sameName = (a, b) => (a || '').trim().toLowerCase() === (b || '').trim().t
 
 // What one job takes from stock: its feet of line, one bulb per socket dealt out across its color
 // pattern, one clip per bulb, one timer, and its mini light balls by color (the actual count once
-// entered, else the estimate). A job set to use extra lights (stock kept outside the inventory,
-// which already has clips on it) takes only its timer.
+// entered, else the estimate). A job set to use extra lights (roofline stock kept outside the
+// inventory, which already has clips on it) takes no line, bulbs or clips; its mini lights and
+// timer still come from inventory.
 function jobStockUse(job, settings) {
-  if (job.extraLights) return { line: 0, noColor: 0, timers: 1, clips: 0, bulbs: {}, mini: {} };
-  const feet = Math.max(0, Number(job.feet) || 0);
-  const clips = socketsFor(feet, settings);
-  const pattern = ROOFLINE_PATTERNS[job.rooflineColor];
-  const bulbs = {};
-  if (feet > 0 && pattern) bulbsByColor(pattern, socketsFor(feet, settings)).forEach(([color, count]) => {
-    if (count) bulbs[color] = (bulbs[color] || 0) + count;
-  });
   const mini = {};
   (job.miniLights || []).forEach(r => {
     const balls = blankNum(r.actual) ? (Number(r.est) || 0) : (Number(r.actual) || 0);
@@ -971,6 +964,14 @@ function jobStockUse(job, settings) {
     const color = (r.color || '').trim() || 'No color picked';
     const key = color.toLowerCase();
     (mini[key] || (mini[key] = { color, balls: 0 })).balls += balls;
+  });
+  if (job.extraLights) return { line: 0, noColor: 0, timers: 1, clips: 0, bulbs: {}, mini };
+  const feet = Math.max(0, Number(job.feet) || 0);
+  const clips = socketsFor(feet, settings);
+  const pattern = ROOFLINE_PATTERNS[job.rooflineColor];
+  const bulbs = {};
+  if (feet > 0 && pattern) bulbsByColor(pattern, socketsFor(feet, settings)).forEach(([color, count]) => {
+    if (count) bulbs[color] = (bulbs[color] || 0) + count;
   });
   return { line: feet, noColor: pattern ? 0 : feet, timers: 1, clips, bulbs, mini };
 }
@@ -1837,7 +1838,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         </div>
         {extraJobs.length > 0 && (
           <div className="hint">
-            🎄 Using your extra lights, so their lights aren’t counted here: <b>{extraJobs.map(j => j.customer || 'Untitled job').join(', ')}</b>.
+            🎄 Using your extra lights, so their line, bulbs and clips aren’t counted here (their mini lights and timers are): <b>{extraJobs.map(j => j.customer || 'Untitled job').join(', ')}</b>.
           </div>
         )}
       </div>
@@ -2646,7 +2647,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
         </div>
         <div className="hint">
           {extraLights
-            ? 'Uses your extra lights (clips already on them), so this job’s line, bulbs, clips and mini lights don’t come out of Inventory. Its timer still does.'
+            ? 'Uses your extra lights (clips already on them), so this job’s line, bulbs and clips don’t come out of Inventory. Its mini lights and timer still do.'
             : 'This job’s line, bulbs, clips and mini lights come out of Inventory. Pick Extra lights if you’re using stock you don’t count there.'}
         </div>
         </div>
