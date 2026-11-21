@@ -146,6 +146,15 @@
   .sync-pill:active { transform: scale(.96); }
   .sync-pill.ok { border-color: rgba(142,230,178,.55); color: var(--good-on-dark); }
   .sync-pill.err { border-color: rgba(255,170,160,.6); color: var(--bad-on-dark); }
+  .sync-warn { width: 100%; max-width: 640px; margin: 14px auto 0; padding: 0 14px; }
+  .sync-warn-inner {
+    display: flex; align-items: center; gap: 10px 12px; flex-wrap: wrap; padding: 12px 14px; border-radius: 14px;
+    background: var(--loss-soft); border: 1.5px solid var(--red); color: var(--text); font-size: 13.5px; font-weight: 650; line-height: 1.4;
+  }
+  .sync-warn-ic { font-size: 18px; line-height: 1; }
+  .sync-warn-text { flex: 1; min-width: 190px; }
+  .sync-warn-text small { display: block; margin-top: 3px; font-size: 12px; font-weight: 600; color: var(--muted); }
+  .sync-warn-btn { flex-shrink: 0; }
 
   .string-lights {
     position: absolute; left: 0; right: 0; bottom: -6px; height: 18px; overflow: hidden; pointer-events: none;
@@ -524,6 +533,17 @@
   .order-box.late { background: var(--loss-soft); }
   .order-box.late .when { color: var(--loss); }
   .covered { margin-top: 8px; font-size: 13px; font-weight: 700; color: var(--profit); }
+  .inv-added { display: block; margin-top: 1px; font-size: 11px; font-weight: 700; color: var(--profit); }
+  .inv-undo { border: 0; background: none; color: var(--loss); font-weight: 800; font-size: 12px; cursor: pointer; padding: 0 0 0 10px; }
+  .inv-add-row { cursor: default; }
+  .inv-add-btn { margin: 6px 0 8px; }
+  .short-row { align-items: center; }
+  .short-right { display: inline-flex; align-items: center; gap: 10px; white-space: nowrap; }
+  .ordered-btn { padding: 5px 10px; font-size: 12.5px; }
+  .stock-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .stock-preview { margin-top: 12px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: 13.5px; line-height: 1.5; }
+  .stock-short { color: var(--loss); font-weight: 800; }
+  .stock-ok { color: var(--profit); font-weight: 800; }
   .inv-use-head { padding: 9px 0 3px; font-size: 10.5px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
   .inv-use b { color: var(--text); }
 
@@ -548,6 +568,7 @@
     .app-header { box-shadow: 0 12px 30px -20px rgba(0,0,0,.55); }
     .header-inner { padding: 22px 36px 28px; max-width: 1240px; }
     main { max-width: 1240px; padding: 26px 36px 40px; }
+    .sync-warn { max-width: 1240px; padding: 0 36px; margin-top: 22px; }
     .tab-bar {
       left: 0; top: 0; bottom: 0; right: auto; width: 264px; max-width: none; margin: 0;
       flex-direction: column; gap: 4px; padding: 22px 16px 18px; border-radius: 0;
@@ -667,7 +688,10 @@ function migrate(data) {
   const advances = Array.isArray(data.advances) ? data.advances : [];
   // Weeks marked paid, per tech: { id, weekKey (that Monday), techId, amount paid, paidAt }.
   const paidWeeks = Array.isArray(data.paidWeeks) ? data.paidWeeks : [];
-  return { ...data, techs, jobs, settings, inventory, advances, paidWeeks };
+  // Stock added to an inventory item as it's ordered, without recounting: { id, itemId, qty, at }.
+  // Counts toward On shelf when it's newer than that item's last count (see InventoryTab).
+  const stockAdds = Array.isArray(data.stockAdds) ? data.stockAdds : [];
+  return { ...data, techs, jobs, settings, inventory, advances, paidWeeks, stockAdds };
 }
 
 // Commission used to be one % per job, split evenly between its techs; each tech now has
@@ -686,7 +710,7 @@ function perTechCommission(job, settings) {
 const pct2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 function loadData() {
-  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS }, inventory: [], advances: [], paidWeeks: [] };
+  const fallback = { techs: [], jobs: [], expenses: [], settings: { ...DEFAULT_SETTINGS }, inventory: [], advances: [], paidWeeks: [], stockAdds: [] };
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return migrate({ ...fallback, ...JSON.parse(raw) });
@@ -707,8 +731,127 @@ const TS_KEY = 'xmasLightsUpdatedAt';
 const BACKUP_KEY = 'xmasLightsBackups';
 const lsGet = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} };
-const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length + (d.inventory || []).length + (d.advances || []).length + (d.paidWeeks || []).length;
+const recordCount = (d) => (d.techs || []).length + (d.jobs || []).length + (d.expenses || []).length + (d.inventory || []).length + (d.advances || []).length + (d.paidWeeks || []).length + (d.stockAdds || []).length;
 const userDoc = (uid) => FB_DB.collection('users').doc(uid).collection('data').doc('xmasLights');
+
+// ---- Combining changes from two devices ----
+// The "sync base" is the last copy this device and the cloud agreed on. When the phone and the
+// computer have both changed things since then, every change is kept, record by record, instead
+// of one device's whole copy replacing the other's (which is how entries used to get lost).
+const SYNC_BASE_KEY = 'xmasLightsSyncBase';
+const LIST_KEYS = ['techs', 'jobs', 'expenses', 'inventory', 'advances', 'paidWeeks', 'stockAdds'];
+// JSON that ignores key order, for telling whether two copies of something really differ.
+const canon = (v) => {
+  if (v && typeof v.toJSON === 'function') v = v.toJSON();
+  if (Array.isArray(v)) return '[' + v.map(x => x === undefined ? 'null' : canon(x)).join(',') + ']';
+  if (v && typeof v === 'object') return '{' + Object.keys(v).filter(k => v[k] !== undefined).sort()
+    .map(k => JSON.stringify(k) + ':' + canon(v[k])).join(',') + '}';
+  return v === undefined ? 'undefined' : JSON.stringify(v);
+};
+const sameData = (a, b) => canon(a) === canon(b);
+const readSyncBase = (uid) => { const b = lsGet(SYNC_BASE_KEY, null); return b && b.uid === uid && b.data ? b.data : null; };
+const writeSyncBase = (uid, json) => { try { localStorage.setItem(SYNC_BASE_KEY, '{"uid":' + JSON.stringify(uid) + ',"data":' + json + '}'); } catch (e) {} };
+const isPlainObj = (v) => !!v && typeof v === 'object' && !Array.isArray(v);
+
+// One record changed on both devices. Changes to different fields are all kept. If both changed
+// the same field differently, the device that changed things last wins the whole record, so
+// fields that belong together (like a payment's method and its card fee) never get mixed up.
+// For settings (perField) only the clashing setting goes to the device that changed things last.
+function mergeRecord(base, mine, theirs, mineWins, perField) {
+  if (!isPlainObj(mine) || !isPlainObj(theirs)) return mineWins ? mine : theirs;
+  const b = isPlainObj(base) ? base : {};
+  const out = {};
+  let clash = false;
+  [...new Set([...Object.keys(mine), ...Object.keys(theirs), ...Object.keys(b)])].forEach(k => {
+    let v;
+    if (sameData(mine[k], b[k])) v = theirs[k];
+    else if (sameData(theirs[k], b[k]) || sameData(mine[k], theirs[k])) v = mine[k];
+    else { clash = true; v = mineWins ? mine[k] : theirs[k]; }
+    if (v !== undefined) out[k] = v;
+  });
+  if (clash && !perField) return mineWins ? mine : theirs;
+  return sameData(out, theirs) ? theirs : sameData(out, mine) ? mine : out;
+}
+
+// A list (jobs, expenses, ...) matched up by record id. Added on either side: kept. Deleted on
+// one side: deleted, unless the other side edited it since (an edit is never thrown away).
+function mergeList(base, mine, theirs, mineWins) {
+  const keyed = (arr) => {
+    const n = {};
+    return (Array.isArray(arr) ? arr : []).map(r => {
+      const id = isPlainObj(r) && r.id != null ? 'id:' + r.id : 'v:' + canon(r);
+      n[id] = (n[id] || 0) + 1;
+      return [id + '#' + n[id], r];
+    });
+  };
+  const B = new Map(keyed(base)), M = keyed(mine), T = keyed(theirs);
+  const mMap = new Map(M), tMap = new Map(T);
+  const pick = (k) => {
+    const b = B.get(k), m = mMap.get(k), t = tMap.get(k);
+    if (m === undefined) return b !== undefined && sameData(t, b) ? undefined : t;
+    if (t === undefined) return b !== undefined && sameData(m, b) ? undefined : m;
+    if (sameData(m, t) || sameData(m, b)) return t;
+    if (sameData(t, b)) return m;
+    return mergeRecord(b, m, t, mineWins, false);
+  };
+  // Keep the cloud's order; slot this device's new records in where they sit in its own list.
+  const out = [];
+  T.forEach(([k]) => { const v = pick(k); if (v !== undefined) out.push([k, v]); });
+  let pos = 0;
+  M.forEach(([k]) => {
+    const at = out.findIndex(e => e[0] === k);
+    if (at >= 0) { pos = at + 1; return; }
+    if (tMap.has(k)) return;
+    const v = pick(k);
+    if (v !== undefined) { out.splice(pos, 0, [k, v]); pos++; }
+  });
+  return out.map(e => e[1]);
+}
+
+function mergeData(base, mine, theirs, mineWins) {
+  const out = {};
+  LIST_KEYS.forEach(k => { out[k] = mergeList(base[k], mine[k], theirs[k], mineWins); });
+  // Both devices marked the same tech's week paid while apart: keep only the latest one.
+  const latest = {};
+  out.paidWeeks.forEach(p => {
+    const k = p.weekKey + '|' + p.techId;
+    if (!latest[k] || String(p.paidAt || '') > String(latest[k].paidAt || '')) latest[k] = p;
+  });
+  out.paidWeeks = out.paidWeeks.filter(p => latest[p.weekKey + '|' + p.techId] === p);
+  return {
+    techs: out.techs, jobs: out.jobs, expenses: out.expenses,
+    settings: mergeRecord(base.settings, mine.settings || {}, theirs.settings || {}, mineWins, true),
+    inventory: out.inventory, advances: out.advances, paidWeeks: out.paidWeeks, stockAdds: out.stockAdds,
+  };
+}
+
+// The cloud copy in this version's format. A field written by an older version of the app that
+// didn't have it yet (inventory, advances, paid weeks) is filled from `fill`, never left empty.
+function cloudCopy(d, fill) {
+  const c = migrate({
+    techs: d.techs || [], jobs: d.jobs || [], expenses: d.expenses || [], settings: d.settings || {},
+    inventory: d.inventory, advances: d.advances, paidWeeks: d.paidWeeks, stockAdds: d.stockAdds,
+  });
+  return {
+    ...c,
+    inventory: Array.isArray(d.inventory) ? c.inventory : fill.inventory,
+    advances: Array.isArray(d.advances) ? c.advances : fill.advances,
+    paidWeeks: Array.isArray(d.paidWeeks) ? c.paidWeeks : fill.paidWeeks,
+    stockAdds: Array.isArray(d.stockAdds) ? c.stockAdds : fill.stockAdds,
+  };
+}
+const cloudComplete = (d) => Array.isArray(d.inventory) && Array.isArray(d.advances) && Array.isArray(d.paidWeeks) && Array.isArray(d.stockAdds);
+
+// Before a save replaces cloud records this device never had, keep that cloud copy in the
+// Automatic Backups list so nothing can be lost for good.
+function stashCloudCopy(cloud) {
+  const all = lsGet(BACKUP_KEY, []);
+  const ts = Date.now();
+  all.push({ day: 'cloud-' + ts, ts, label: 'Cloud copy before sync', data: cloud });
+  const stashes = all.filter(b => String(b.day).startsWith('cloud-'));
+  const drop = new Set(stashes.slice(0, Math.max(0, stashes.length - 3)).map(b => b.day));
+  lsSet(BACKUP_KEY, all.filter(b => !drop.has(b.day)));
+}
 
 // ---- Mock-up pictures ----
 // A picture would quickly push the single synced data record past Firestore's ~1 MB limit and
@@ -815,7 +958,10 @@ function autoBackup(data) {
   if (existing && recordCount(existing.data) > recordCount(data)) return;
   const list = all.filter(b => b.day !== day);
   list.push({ day, ts: Date.now(), data });
-  lsSet(BACKUP_KEY, list.slice(-14));
+  // Safety copies kept by stashCloudCopy don't count toward the 14 days.
+  const isStash = (b) => String(b.day).startsWith('cloud-');
+  const keep = new Set(list.filter(b => !isStash(b)).slice(-14));
+  lsSet(BACKUP_KEY, list.filter(b => isStash(b) || keep.has(b)));
 }
 
 const fmtMoney = (n) => {
@@ -1295,6 +1441,7 @@ function App() {
   const [inventory, setInventory] = useState(initial.inventory);
   const [advances, setAdvances] = useState(initial.advances);
   const [paidWeeks, setPaidWeeks] = useState(initial.paidWeeks);
+  const [stockAdds, setStockAdds] = useState(initial.stockAdds);
   const [settings, setSettings] = useState(initial.settings);
   const [tab, setTab] = useState('jobs');
 
@@ -1302,99 +1449,158 @@ function App() {
   const [advanceModal, setAdvanceModal] = useState(null); // null | {} | advance
   const [jobModal, setJobModal] = useState(null); // null | {} | job
   const [expenseModal, setExpenseModal] = useState(null); // null | {} | expense
+  const [stockModal, setStockModal] = useState(null); // null | { key?, amount? } (Add order sheet, Inventory tab)
 
   // ---- Auth + sync ----
   const [user, setUser] = useState(null);
   const [syncState, setSyncState] = useState('synced'); // synced | saving | error
   const [authError, setAuthError] = useState('');
+  // False until Google sign-in has said whether anyone is signed in, so the
+  // "not syncing" warning doesn't flash while the app starts up.
+  const [authReady, setAuthReady] = useState(!FB_AUTH);
+  const [slowSave, setSlowSave] = useState(false);
+  // True once the cloud has actually answered since signing in (not just the offline cache).
+  const [cloudConnected, setCloudConnected] = useState(false);
   const userRef = useRef(null);
   const dataRef = useRef(null);
   const snapshotUnsub = useRef(null);
   const lastCloudJSON = useRef('');
   const cloudReady = useRef(false);
   const isSaving = useRef(false);
+  const saveQueued = useRef(false);
   const retryTimer = useRef(null);
   const firstRun = useRef(true);
   const localUpdatedAt = useRef(Number(lsGet(TS_KEY, 0)) || 0);
   userRef.current = user;
-  dataRef.current = { techs, jobs, expenses, settings, inventory, advances, paidWeeks };
+  dataRef.current = { techs, jobs, expenses, settings, inventory, advances, paidWeeks, stockAdds };
 
-  const doCloudSave = (uid, contentJson, ts) => {
+  // Put a whole copy of the data on screen (and so into this device's storage).
+  const showData = (d) => {
+    dataRef.current = { techs: d.techs, jobs: d.jobs, expenses: d.expenses, settings: d.settings, inventory: d.inventory, advances: d.advances, paidWeeks: d.paidWeeks, stockAdds: d.stockAdds };
+    setTechs(d.techs); setJobs(d.jobs); setExpenses(d.expenses); setSettings(d.settings);
+    setInventory(d.inventory); setAdvances(d.advances); setPaidWeeks(d.paidWeeks); setStockAdds(d.stockAdds);
+  };
+
+  // Every save is a transaction: read the cloud copy, combine it with this device's copy
+  // (mergeData), then write. If the other device saves in between, Google runs it again, so a
+  // save can never overwrite changes it hasn't seen. With no connection the save fails and is
+  // retried, instead of being queued up to overwrite the cloud later. One save runs at a time;
+  // anything changed meanwhile goes in the next one.
+  const doCloudSave = (uid) => {
     clearTimeout(retryTimer.current);
+    if (isSaving.current) { saveQueued.current = true; return; }
     isSaving.current = true;
-    localUpdatedAt.current = ts;
-    lsSet(TS_KEY, ts);
+    saveQueued.current = false;
     setSyncState('saving');
-    try {
-      userDoc(uid).set({ ...JSON.parse(contentJson), updatedAt: ts })
-        .then(() => { lastCloudJSON.current = contentJson; isSaving.current = false; setSyncState('synced'); })
-        .catch((err) => {
-          console.warn('Cloud save failed', err);
-          isSaving.current = false;
-          setSyncState('error');
-          retryTimer.current = setTimeout(() => doCloudSave(uid, contentJson, ts), 8000);
-        });
-    } catch (e) { isSaving.current = false; setSyncState('error'); }
+    const ref = userDoc(uid);
+    let wrote = null;
+    FB_DB.runTransaction(tx => tx.get(ref).then(snap => {
+      const local = dataRef.current;
+      const localTs = Number(localUpdatedAt.current) || 0;
+      let result = local;
+      // The copy's time is when it was last edited (not when it reached the cloud), so when both
+      // devices changed the same thing, the one changed last wins even if it connects first.
+      let ts = localTs || Date.now();
+      let stash = null;
+      if (snap.exists) {
+        const d = snap.data();
+        const cloudTs = Number(d.updatedAt) || 0;
+        const base = readSyncBase(uid);
+        const cloud = cloudCopy(d, base || local);
+        if (base && recordCount(cloud) > 0) {
+          result = sameData(local, base) ? cloud
+            : sameData(cloud, base) ? local
+            : mergeData(base, local, cloud, localTs >= cloudTs);
+        } else if (recordCount(cloud) > 0) {
+          // First sync on this device since this version (no base to compare against): this
+          // device's copy is saved as before, but keep the cloud copy as a backup if it has
+          // records this device doesn't.
+          const ids = new Set(LIST_KEYS.flatMap(k => (local[k] || []).map(r => k + ':' + (r && r.id))));
+          if (LIST_KEYS.some(k => (cloud[k] || []).some(r => !ids.has(k + ':' + (r && r.id))))) stash = cloud;
+        }
+        ts = Math.max(ts, cloudTs + 1);
+      }
+      const json = JSON.stringify(result);
+      wrote = { local, result, json, ts, stash };
+      tx.set(ref, { ...JSON.parse(json), updatedAt: ts });
+    })).then(() => {
+      isSaving.current = false;
+      if (!userRef.current || userRef.current.uid !== uid) { setSyncState('synced'); return; }
+      if (wrote.stash) stashCloudCopy(wrote.stash);
+      lastCloudJSON.current = wrote.json;
+      writeSyncBase(uid, wrote.json);
+      localUpdatedAt.current = wrote.ts;
+      lsSet(TS_KEY, wrote.ts);
+      // Show what came from the other device. Anything entered here while saving stays on top.
+      const now = dataRef.current;
+      const editedMeanwhile = !sameData(now, wrote.local);
+      const show = editedMeanwhile ? mergeData(wrote.local, now, wrote.result, true) : wrote.result;
+      if (!sameData(show, now)) showData(show);
+      if (editedMeanwhile) saveQueued.current = true;
+      if (saveQueued.current) doCloudSave(uid); else setSyncState('synced');
+    }).catch((err) => {
+      console.warn('Cloud save failed', err);
+      isSaving.current = false;
+      setSyncState('error');
+      if (err && err.code === 'permission-denied') setAuthError('Cloud sync was denied by Firestore security rules.');
+      retryTimer.current = setTimeout(() => { if (userRef.current && userRef.current.uid === uid) doCloudSave(uid); }, 8000);
+    });
   };
 
   const subscribeToCloud = (uid) => {
     if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; }
-    snapshotUnsub.current = userDoc(uid).onSnapshot(snapshot => {
+    snapshotUnsub.current = userDoc(uid).onSnapshot({ includeMetadataChanges: true }, snapshot => {
+      // Only act on what the cloud itself says. With no signal, Firestore reports from its
+      // offline cache, which can claim there's no cloud copy at all; acting on that used to
+      // queue up an overwrite of the real cloud copy for when the signal came back.
+      if (snapshot.metadata && (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites)) return;
       cloudReady.current = true;
+      setCloudConnected(true);
       const local = dataRef.current;
-      if (snapshot.exists) {
-        const d = snapshot.data();
-        // Another device may still be running an older version, so convert whatever arrives.
-        const incoming = migrate({
-          techs: d.techs || [],
-          jobs: d.jobs || [],
-          expenses: d.expenses || [],
-          settings: d.settings || {},
-          inventory: d.inventory,
-          advances: d.advances,
-          paidWeeks: d.paidWeeks,
-        });
-        // A copy saved by a version from before the Inventory tab has no `inventory` field at
-        // all. Adopting it must not wipe this device's inventory: keep ours, and the save that
-        // follows puts it back in the cloud. Same for advances and paid weeks, which came later still.
-        const cloudKnowsInventory = Array.isArray(d.inventory);
-        const cloudKnowsAdvances = Array.isArray(d.advances);
-        const cloudKnowsPaidWeeks = Array.isArray(d.paidWeeks);
-        const incomingJSON = JSON.stringify(incoming);
-        if (incomingJSON === lastCloudJSON.current) return;
-
-        // Only adopt the cloud copy if it is genuinely newer; a stale/emptier copy must never
-        // overwrite newer local data. In that case keep ours and re-push it to heal the cloud.
-        // A completely empty cloud copy is never trusted over real local data, whatever its timestamp.
-        const cloudTs = Number(d.updatedAt) || 0;
-        const localTs = Number(localUpdatedAt.current) || 0;
-        const cloudCount = recordCount(incoming);
-        const localCount = recordCount(local);
-        if (cloudCount === 0 && localCount === 0) return;
-        const adopt = cloudCount > 0 && (
-          localCount === 0
-          || cloudTs > localTs
-          || (cloudTs === localTs && cloudCount >= localCount));
-
-        if (adopt) {
-          lastCloudJSON.current = incomingJSON;
-          localUpdatedAt.current = cloudTs;
-          lsSet(TS_KEY, cloudTs);
-          setTechs(incoming.techs);
-          setJobs(incoming.jobs);
-          setExpenses(incoming.expenses);
-          setSettings(incoming.settings);
-          setInventory(cloudKnowsInventory ? incoming.inventory : local.inventory);
-          setAdvances(cloudKnowsAdvances ? incoming.advances : local.advances);
-          setPaidWeeks(cloudKnowsPaidWeeks ? incoming.paidWeeks : local.paidWeeks);
-        } else if (!isSaving.current) {
-          doCloudSave(uid, JSON.stringify(local), Math.max(localTs, cloudTs) + 1);
-        }
-      } else if (recordCount(local) > 0) {
+      if (!snapshot.exists) {
         // No cloud copy yet: seed it, but never from an empty device.
-        const ts = Math.max(Number(localUpdatedAt.current) || 0, Date.now());
-        doCloudSave(uid, JSON.stringify(local), ts);
+        if (recordCount(local) > 0) doCloudSave(uid);
+        return;
       }
+      const d = snapshot.data();
+      const base = readSyncBase(uid);
+      // Another device may still be running an older version, so convert whatever arrives.
+      // A field that version didn't have yet (inventory, advances, paid weeks) keeps ours.
+      const incoming = cloudCopy(d, base || local);
+      const incomingJSON = JSON.stringify(incoming);
+      if (incomingJSON === lastCloudJSON.current) return;
+
+      const cloudTs = Number(d.updatedAt) || 0;
+      const localTs = Number(localUpdatedAt.current) || 0;
+      const cloudCount = recordCount(incoming);
+      const localCount = recordCount(local);
+      if (cloudCount === 0 && localCount === 0) return;
+      const complete = cloudComplete(d);
+      // Take the cloud copy as this device's copy.
+      const take = () => {
+        lastCloudJSON.current = incomingJSON;
+        localUpdatedAt.current = cloudTs;
+        lsSet(TS_KEY, cloudTs);
+        if (complete) writeSyncBase(uid, incomingJSON);
+        if (!sameData(local, incoming)) showData(incoming);
+        if (!complete) doCloudSave(uid); // put the fields an older version left out back in the cloud
+      };
+
+      if (complete && sameData(local, incoming)) { take(); return; }
+      if (base) {
+        // Nothing changed here since the last sync: the cloud copy is simply newer, take it.
+        // Otherwise save, which combines this device's changes with the cloud's (doCloudSave).
+        // A completely empty cloud copy is never taken over real data.
+        if (cloudCount > 0 && sameData(local, base)) take();
+        else doCloudSave(uid);
+        return;
+      }
+      // First sync on this device since this version: the newer copy wins, as before.
+      const adopt = cloudCount > 0 && (
+        localCount === 0
+        || cloudTs > localTs
+        || (cloudTs === localTs && cloudCount >= localCount));
+      if (adopt) take(); else doCloudSave(uid);
     }, (err) => {
       console.warn('Cloud listen failed', err);
       setSyncState('error');
@@ -1406,29 +1612,42 @@ function App() {
     if (!FB_AUTH) return;
     const unsub = FB_AUTH.onAuthStateChanged(u => {
       setUser(u);
+      setAuthReady(true);
       if (u) { subscribeToCloud(u.uid); pushPendingMockups(); }
-      else if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; cloudReady.current = false; }
+      else {
+        if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; }
+        cloudReady.current = false;
+        setCloudConnected(false);
+      }
     });
-    return () => { unsub(); if (snapshotUnsub.current) snapshotUnsub.current(); };
+    const t = setTimeout(() => setAuthReady(true), 5000);
+    return () => { unsub(); clearTimeout(t); if (snapshotUnsub.current) snapshotUnsub.current(); };
   }, []);
+
+  // Signed in but the cloud hasn't answered, or a save hasn't finished, for 15 seconds (usually
+  // no signal): that gets the warning banner.
+  const waitingOnCloud = !!user && (!cloudConnected || syncState === 'saving');
+  useEffect(() => {
+    if (!waitingOnCloud) { setSlowSave(false); return; }
+    const t = setTimeout(() => setSlowSave(true), 15000);
+    return () => clearTimeout(t);
+  }, [waitingOnCloud]);
 
   // Runs only when the data itself changes (not on sign-in), so a stale device is never
   // mistaken for the newest copy just because someone signed in on it.
   useEffect(() => {
-    const data = { techs, jobs, expenses, settings, inventory, advances, paidWeeks };
+    const data = { techs, jobs, expenses, settings, inventory, advances, paidWeeks, stockAdds };
     saveData(data);
     const json = JSON.stringify(data);
     if (json === lastCloudJSON.current) return;
     autoBackup(data);
     if (firstRun.current) { firstRun.current = false; return; }
-    const ts = Date.now();
-    if (!userRef.current || !cloudReady.current) {
-      localUpdatedAt.current = ts;
-      lsSet(TS_KEY, ts);
-      return;
-    }
-    doCloudSave(userRef.current.uid, json, ts);
-  }, [techs, jobs, expenses, settings, inventory, advances, paidWeeks]);
+    // When this device's copy last changed; always later than the cloud copy it started from.
+    const ts = Math.max(Date.now(), (Number(localUpdatedAt.current) || 0) + 1);
+    localUpdatedAt.current = ts;
+    lsSet(TS_KEY, ts);
+    if (userRef.current && cloudReady.current) doCloudSave(userRef.current.uid);
+  }, [techs, jobs, expenses, settings, inventory, advances, paidWeeks, stockAdds]);
 
   const signIn = () => {
     setAuthError('');
@@ -1442,7 +1661,9 @@ function App() {
   const signOut = () => {
     FB_AUTH.signOut();
     cloudReady.current = false;
+    setCloudConnected(false);
     clearTimeout(retryTimer.current);
+    saveQueued.current = false;
     if (snapshotUnsub.current) { snapshotUnsub.current(); snapshotUnsub.current = null; }
   };
 
@@ -1455,6 +1676,7 @@ function App() {
       inventory: raw.inventory,
       advances: raw.advances,
       paidWeeks: raw.paidWeeks,
+      stockAdds: raw.stockAdds,
     });
     setTechs(d.techs);
     setJobs(d.jobs);
@@ -1464,6 +1686,7 @@ function App() {
     if (Array.isArray(raw.inventory)) setInventory(d.inventory);
     if (Array.isArray(raw.advances)) setAdvances(d.advances);
     if (Array.isArray(raw.paidWeeks)) setPaidWeeks(d.paidWeeks);
+    if (Array.isArray(raw.stockAdds)) setStockAdds(d.stockAdds);
     toast('Backup restored');
   };
 
@@ -1547,12 +1770,23 @@ function App() {
   }[tab];
   const pageTitle = (TABS.find(t => t.id === tab) || TABS[0]).label;
   const syncButton = (
-    <button className={"sync-pill" + (user && syncState === 'synced' ? ' ok' : '') + (syncState === 'error' ? ' err' : '')}
+    <button className={"sync-pill" + (user && cloudConnected && syncState === 'synced' ? ' ok' : '') + (syncState === 'error' || (!user && authReady) ? ' err' : '')}
       onClick={() => goTab('settings')}>
-      {!user ? '☁️ Sign in to sync' : syncState === 'saving' ? '☁️ Saving…' : syncState === 'error' ? '⚠️ Sync error' : '✓ Synced'}
+      {!user ? (authReady ? '⚠️ Sign in to sync' : '☁️ Sign in to sync') : syncState === 'error' ? '⚠️ Sync error' : !cloudConnected ? '☁️ Connecting…' : syncState === 'saving' ? '☁️ Saving…' : '✓ Synced'}
     </button>
   );
-  const fab = { jobs: ['New job', () => setJobModal({})], techs: ['Add tech', () => setTechModal({})], expenses: ['Add expense', () => setExpenseModal({})] }[tab];
+  // A warning that can't be missed whenever what's entered here isn't reaching the cloud.
+  const syncWarning = !authReady ? null
+    : IS_FILE ? { text: 'This copy is opened from a file on this computer, so nothing you enter syncs to your phone. Use the web version.', action: ['Open web version', () => { location.href = LIVE_URL; }] }
+    : !user ? (FB_AUTH
+      ? { text: 'Not syncing — anything you enter is only saved on this device. Sign in so your phone and computer share everything.', action: ['Sign in with Google', signIn] }
+      : { text: "Not syncing — couldn't reach Google sign-in. Anything you enter is only saved on this device for now. Reload when you have a connection." })
+    : syncState === 'error' ? { text: "Couldn't save to the cloud — trying again every few seconds. Your changes are kept on this device until it goes through." }
+    : slowSave ? { text: cloudConnected
+      ? 'Still saving… check your signal. Your changes are kept on this device and will upload once you’re connected.'
+      : 'Can’t reach the cloud right now (no signal?). Your changes are kept on this device and will sync once you’re connected.' }
+    : null;
+  const fab = { jobs: ['New job', () => setJobModal({})], techs: ['Add tech', () => setTechModal({})], expenses: ['Add expense', () => setExpenseModal({})], inventory: ['Add order', () => setStockModal({})] }[tab];
 
   return (
     <React.Fragment>
@@ -1570,6 +1804,15 @@ function App() {
         </div>
         <StringLights />
       </header>
+      {syncWarning && (
+        <div className="sync-warn" role="alert">
+          <div className="sync-warn-inner">
+            <span className="sync-warn-ic" aria-hidden="true">⚠️</span>
+            <div className="sync-warn-text">{syncWarning.text}{authError ? <small>{authError}</small> : null}</div>
+            {syncWarning.action && <button className="btn btn-red btn-sm sync-warn-btn" onClick={syncWarning.action[1]}>{syncWarning.action[0]}</button>}
+          </div>
+        </div>
+      )}
       <main>
         <div className="page-head mobile-only">
           <h2 className="page-title">{pageTitle}</h2>
@@ -1583,7 +1826,8 @@ function App() {
             onDelete={deleteJob} onSetPayment={setPayment} />
         )}
         {tab === 'inventory' && (
-          <InventoryTab jobs={jobs} inventory={inventory} setInventory={setInventory} settings={settings} setSettings={setSettings} onEditJob={(j) => setJobModal(j)} />
+          <InventoryTab jobs={jobs} inventory={inventory} setInventory={setInventory} settings={settings} setSettings={setSettings} onEditJob={(j) => setJobModal(j)}
+            stockAdds={stockAdds} setStockAdds={setStockAdds} stockModal={stockModal} setStockModal={setStockModal} />
         )}
         {tab === 'techs' && (
           <TechsTab techs={activeTechs} allTechs={techs} jobs={jobs} settings={settings} advances={advances} paidWeeks={paidWeeks}
@@ -1609,7 +1853,7 @@ function App() {
             onEditTech={(t) => setTechModal(t)} onDeleteTech={deleteTech}
             jobs={jobs} onEditJob={(j) => setJobModal(j)} onDeleteJob={deleteJob}
             expenses={expenses} onEditExpense={(e) => setExpenseModal(e)} onDeleteExpense={deleteExpense}
-            inventory={inventory} advances={advances} paidWeeks={paidWeeks}
+            inventory={inventory} advances={advances} paidWeeks={paidWeeks} stockAdds={stockAdds}
             user={user} syncState={syncState} authError={authError} signIn={signIn} signOut={signOut} onImport={importData} />
         )}
         </div>
@@ -1683,7 +1927,7 @@ function CommitInput({ value, onCommit, ...props }) {
 const validQty = (text) => text.trim() !== '' && !isNaN(Number(text)) && Number(text) >= 0;
 const fmtQty = (n) => Math.round(n).toLocaleString();
 
-function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, onEditJob }) {
+function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, onEditJob, stockAdds, setStockAdds, stockModal, setStockModal }) {
   const needs = useMemo(() => inventoryNeeds(jobs, settings), [jobs, settings.bulbSpacingIn]);
   const extraJobs = jobs.filter(j => j.extraLights && j.status !== 'Completed');
   const spacing = spacingOf(settings);
@@ -1701,7 +1945,11 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
     toast('Count saved');
   };
   const updateItem = (id, patch) => { setInventory(prev => prev.map(i => i.id === id ? { ...i, ...patch } : i)); toast('Stock updated'); };
-  const removeItem = (id) => { setInventory(prev => prev.filter(i => i.id !== id)); toast('Removed from inventory'); };
+  const removeItem = (id) => {
+    setInventory(prev => prev.filter(i => i.id !== id));
+    setStockAdds(prev => prev.filter(a => a.itemId !== id));
+    toast('Removed from inventory');
+  };
   const addItem = (kind) => setInventory(prev => [...prev, { id: uid(), kind, name: '', qty: 0, countedAt: new Date().toISOString() }]);
   // Mini light colors are added from a dropdown (or typed via "Other") and renamed from the row's details.
   const addMiniColor = (choice) => {
@@ -1721,12 +1969,33 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
 
   // Need rounds up: a job can't use a fraction of a foot of line.
   const need = (bucket) => bucket ? Math.max(0, Math.ceil(bucket.needed - 1e-6)) : 0;
-  // On shelf = the last count, minus what jobs completed since then took.
+  // On shelf = the last count, plus orders added since then, minus what jobs completed since then took.
+  // An order added before the latest count is already in that count, so it no longer adds anything.
   const makeRow = (key, kind, name, item, bucket, pick) => {
     const countedAt = countedAtOf(item, settings);
     const taken = takenSince(jobs, countedAt, pick, settings);
     const counted = item ? Number(item.qty) || 0 : 0;
-    return { key, kind, name, item, countedAt, taken, pick, have: Math.max(0, counted - Math.ceil(taken.amount - 1e-6)), need: need(bucket), uses: bucket ? bucket.uses : [] };
+    const adds = item ? (stockAdds || []).filter(a => a.itemId === item.id && String(a.at) > String(countedAt)) : [];
+    const added = adds.reduce((sum, a) => sum + (Number(a.qty) || 0), 0);
+    return { key, kind, name, item, countedAt, taken, pick, adds, added, have: Math.max(0, counted + added - Math.ceil(taken.amount - 1e-6)), need: need(bucket), uses: bucket ? bucket.uses : [] };
+  };
+  // Adding what was ordered. Each one is kept as its own entry (so it can be taken back), not a new count.
+  const addStock = (row, qty) => {
+    let itemId = row.item && row.item.id;
+    if (!itemId) {
+      // None of this in stock yet: start it at 0 as of just now, so only this order counts.
+      const created = { id: uid(), kind: row.kind, name: row.name, qty: 0, countedAt: new Date(Date.now() - 1000).toISOString() };
+      itemId = created.id;
+      setInventory(prev => [...prev, created]);
+    }
+    setStockAdds(prev => [...prev, { id: uid(), itemId, qty, at: new Date().toISOString() }]);
+    toast(`Added ${amountText(row, qty)}`);
+  };
+  const fmtAddDay = (iso) => new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const undoAdd = (row, add) => {
+    if (!confirm(`Take back the +${fmtQty(add.qty)} added ${fmtAddDay(add.at)}?`)) return;
+    setStockAdds(prev => prev.filter(a => a.id !== add.id));
+    toast('Order taken back off');
   };
   const timerRow = makeRow('timer', 'timer', 'Timers', itemsOf('timer')[0], needs.timers, u => u.timers);
   const clipRow = makeRow('clip', 'clip', 'Clips', itemsOf('clip')[0], needs.clips, u => u.clips);
@@ -1747,11 +2016,11 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
       .map(b => makeRow('mini:job:' + b.color.toLowerCase(), 'mini', b.color, null, b, miniPick(b.color))),
   ];
   const shortages = [
-    ...(lineRow.need > lineRow.have ? [{ name: `${spacing}″ line`, amount: lineRow.need - lineRow.have, unit: 'ft', what: 'roofline' }] : []),
-    ...bulbRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'bulbs', what: 'roofline bulbs' })),
-    ...(timerRow.need > timerRow.have ? [{ name: 'Timers', amount: timerRow.need - timerRow.have, unit: '', what: 'one per job' }] : []),
-    ...(clipRow.need > clipRow.have ? [{ name: 'Clips', amount: clipRow.need - clipRow.have, unit: '', what: 'one per C9 bulb' }] : []),
-    ...miniRows.filter(r => r.need > r.have).map(r => ({ name: r.name, amount: r.need - r.have, unit: 'balls', what: 'mini lights' })),
+    ...(lineRow.need > lineRow.have ? [{ row: lineRow, name: `${spacing}″ line`, amount: lineRow.need - lineRow.have, unit: 'ft', what: 'roofline' }] : []),
+    ...bulbRows.filter(r => r.need > r.have).map(r => ({ row: r, name: r.name, amount: r.need - r.have, unit: 'bulbs', what: 'roofline bulbs' })),
+    ...(timerRow.need > timerRow.have ? [{ row: timerRow, name: 'Timers', amount: timerRow.need - timerRow.have, unit: '', what: 'one per job' }] : []),
+    ...(clipRow.need > clipRow.have ? [{ row: clipRow, name: 'Clips', amount: clipRow.need - clipRow.have, unit: '', what: 'one per C9 bulb' }] : []),
+    ...miniRows.filter(r => r.need > r.have).map(r => ({ row: r, name: r.name, amount: r.need - r.have, unit: 'balls', what: 'mini lights' })),
   ];
 
   // Week by week: what each week's jobs use, and order-by dates for whatever runs out.
@@ -1798,15 +2067,24 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
           <span>{fmtQty(amount)} {unit}</span>
         </div>
       ))}
-      <div className="inv-use-head">Last counted {fmtCounted(row.countedAt)}{row.taken.uses.length ? ' · taken off since' : ''}</div>
+      <div className="inv-use-head">Last counted {fmtCounted(row.countedAt)}{row.adds.length ? ' · since then' : row.taken.uses.length ? ' · taken off since' : ''}</div>
+      {row.adds.map(a => (
+        <div key={a.id} className="inv-use inv-add-row">
+          <span>Order added {fmtAddDay(a.at)}</span>
+          <span>+{fmtQty(a.qty)} {unit}<button className="inv-undo" onClick={() => undoAdd(row, a)} aria-label={`Take back the +${fmtQty(a.qty)} added ${fmtAddDay(a.at)}`}>Undo</button></span>
+        </div>
+      ))}
       {row.taken.uses.map(({ job, amount }) => (
         <div key={job.id} className="inv-use" onClick={() => onEditJob(job)}>
           <span><b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))} · Completed</span>
           <span>−{fmtQty(amount)} {unit}</span>
         </div>
       ))}
+      <button className="btn btn-ghost btn-sm inv-add-btn" onClick={() => setStockModal({ key: row.key })}>+ Add an order of this</button>
     </div>
   );
+  // Under an item's name: how much of On shelf is orders added since the last count.
+  const addedTag = (row) => row.added > 0 && <span className="inv-added">+{fmtQty(row.added)} ordered</span>;
   const leftCell = (row) => {
     const left = row.have - row.need;
     return <span className={'inv-left ' + (left < 0 ? 'short' : 'ok')}>{left < 0 ? `${fmtQty(-left)} short` : fmtQty(left)}</span>;
@@ -1819,9 +2097,12 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         {shortages.length === 0 ? (
           <div className="hint" style={{ marginTop: 0 }}>✓ You have enough line, bulbs, timers, clips and mini lights on the shelf for every job that isn’t done yet.</div>
         ) : shortages.map(s => (
-          <div className="payout-row" key={s.what + s.name}>
+          <div className="payout-row short-row" key={s.what + s.name}>
             <span><b>{s.name}</b> <span className="tech-meta">{s.what}</span></span>
-            <span style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtQty(s.amount)} {s.unit}</span>
+            <span className="short-right">
+              <span style={{ fontWeight: 800, color: 'var(--loss)' }}>{fmtQty(s.amount)} {s.unit}</span>
+              <button className="btn btn-ghost btn-sm ordered-btn" onClick={() => setStockModal({ key: s.row.key, amount: s.amount })}>+ Ordered</button>
+            </span>
           </div>
         ))}
         {firstOrderBy && (
@@ -1835,6 +2116,10 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
           <b>On shelf</b> is what’s in your shop now. Type the real number whenever you count. Marking a job <b>Completed</b> takes
           its line, bulbs, mini lights, timer and clips off the shelf. <b>Needed</b> is what the jobs that aren’t done yet will use.
           Mark finished jobs Completed before you count.
+        </div>
+        <div className="hint">
+          <b>Ordered more?</b> Tap <b>+ Ordered</b> next to it, or <b>Add order</b>, and it’s added to On shelf, no recount needed.
+          Typing a number is a full recount, so if you count before an order shows up, add that order again after.
         </div>
         {extraJobs.length > 0 && (
           <div className="hint">
@@ -1898,7 +2183,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         <div className="section-title">Roofline Line (feet)</div>
         <div className="inv-grid inv-head"><span></span><span>On shelf</span><span>Needed</span><span>Left</span></div>
         <div className="inv-grid">
-          <span className="inv-name" onClick={() => setOpen(open === 'line' ? null : 'line')}>{spacing}″ spaced line <span className="tech-meta">{open === 'line' ? '▾' : '▸'}</span></span>
+          <span className="inv-name" onClick={() => setOpen(open === 'line' ? null : 'line')}>{spacing}″ spaced line <span className="tech-meta">{open === 'line' ? '▾' : '▸'}</span>{addedTag(lineRow)}</span>
           <CommitInput type="number" inputMode="numeric" min="0" step="1" value={lineRow.have} aria-label="Feet of line on hand"
             onCommit={text => setQty('line', 'Line', text)} />
           <span className="inv-num">{fmtQty(lineRow.need)}</span>
@@ -1913,7 +2198,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         {bulbRows.map(row => (
           <React.Fragment key={row.key}>
             <div className="inv-grid">
-              <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.name} <span className="tech-meta">{open === row.key ? '▾' : '▸'}</span></span>
+              <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.name} <span className="tech-meta">{open === row.key ? '▾' : '▸'}</span>{addedTag(row)}</span>
               <CommitInput type="number" inputMode="numeric" min="0" step="1" value={row.have} aria-label={`${row.name} bulbs on hand`}
                 onCommit={text => setQty('bulb', row.name, text)} />
               <span className="inv-num">{fmtQty(row.need)}</span>
@@ -1932,7 +2217,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         <div className="section-title">Timers &amp; Clips</div>
         <div className="inv-grid inv-head"><span></span><span>On shelf</span><span>Needed</span><span>Left</span></div>
         <div className="inv-grid">
-          <span className="inv-name" onClick={() => setOpen(open === 'timer' ? null : 'timer')}>Timers <span className="tech-meta">{open === 'timer' ? '▾' : '▸'}</span></span>
+          <span className="inv-name" onClick={() => setOpen(open === 'timer' ? null : 'timer')}>Timers <span className="tech-meta">{open === 'timer' ? '▾' : '▸'}</span>{addedTag(timerRow)}</span>
           <CommitInput type="number" inputMode="numeric" min="0" step="1" value={timerRow.have} aria-label="Timers on hand"
             onCommit={text => setQty('timer', 'Timers', text)} />
           <span className="inv-num">{fmtQty(timerRow.need)}</span>
@@ -1940,7 +2225,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         </div>
         {usesList(timerRow, 'timer')}
         <div className="inv-grid">
-          <span className="inv-name" onClick={() => setOpen(open === 'clip' ? null : 'clip')}>Clips <span className="tech-meta">{open === 'clip' ? '▾' : '▸'}</span></span>
+          <span className="inv-name" onClick={() => setOpen(open === 'clip' ? null : 'clip')}>Clips <span className="tech-meta">{open === 'clip' ? '▾' : '▸'}</span>{addedTag(clipRow)}</span>
           <CommitInput type="number" inputMode="numeric" min="0" step="1" value={clipRow.have} aria-label="Clips on hand"
             onCommit={text => setQty('clip', 'Clips', text)} />
           <span className="inv-num">{fmtQty(clipRow.need)}</span>
@@ -1961,7 +2246,7 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
           <React.Fragment key={row.key}>
             <div className="inv-grid">
               {row.item ? (
-                <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.item.name || 'Unnamed color'} <span className="tech-meta">{open === row.key ? '▾' : '▸'}</span></span>
+                <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.item.name || 'Unnamed color'} <span className="tech-meta">{open === row.key ? '▾' : '▸'}</span>{addedTag(row)}</span>
               ) : (
                 <span className="inv-name" onClick={() => setOpen(open === row.key ? null : row.key)}>{row.name} <span className="tech-meta">{open === row.key ? '▾' : '▸'} on jobs, not in stock</span></span>
               )}
@@ -2003,7 +2288,74 @@ function InventoryTab({ jobs, inventory, setInventory, settings, setSettings, on
         ))}
         <button className="btn btn-ghost btn-sm" style={{ marginTop: 8 }} onClick={() => addItem('other')}>+ Add item</button>
       </div>
+      {stockModal && ReactDOM.createPortal(
+        <AddStockSheet rows={allRows} start={stockModal} onAdd={addStock} onClose={() => setStockModal(null)} />,
+        document.body
+      )}
     </div>
+  );
+}
+
+// "Add order": add what was just ordered to an inventory item without retyping its count.
+const STOCK_STEPS = { line: [100, 500, 1000], bulb: [25, 50, 100], timer: [1, 5, 10], clip: [100, 500, 1000], mini: [1, 5, 10] };
+const STOCK_UNITS = { line: 'feet', bulb: 'bulbs', timer: 'timers', clip: 'clips', mini: 'balls' };
+function AddStockSheet({ rows, start, onAdd, onClose }) {
+  const shortOf = (r) => Math.max(0, r.need - r.have);
+  const first = rows.find(r => r.key === start.key) || rows.find(r => shortOf(r) > 0) || rows[0];
+  const [key, setKey] = useState(first.key);
+  const [amount, setAmount] = useState(start.amount ? String(Math.ceil(start.amount)) : '');
+  const row = rows.find(r => r.key === key) || first;
+  const n = Number(amount);
+  const ok = amount.trim() !== '' && Number.isFinite(n) && n > 0;
+  const add = Math.round(ok ? n : 0);
+  const unit = STOCK_UNITS[row.kind] || '';
+  const label = (r) => r.kind === 'line' ? 'Line (feet)' : r.kind === 'bulb' ? `${r.name} bulbs`
+    : r.kind === 'timer' ? 'Timers' : r.kind === 'clip' ? 'Clips' : `${r.name || 'Unnamed color'} mini lights`;
+  const group = (title, kinds) => {
+    const list = rows.filter(r => kinds.includes(r.kind));
+    return list.length > 0 && <optgroup label={title}>{list.map(r => <option key={r.key} value={r.key}>{label(r)}</option>)}</optgroup>;
+  };
+  const pick = (k) => {
+    // A suggested amount that wasn't changed follows the item; anything typed stays.
+    const prev = rows.find(r => r.key === key);
+    if (prev && amount === String(shortOf(prev))) { const next = rows.find(r => r.key === k); setAmount(next && shortOf(next) ? String(shortOf(next)) : ''); }
+    setKey(k);
+  };
+  const plus = (step) => setAmount(String((ok ? Math.round(n) : 0) + step));
+  const save = (close) => {
+    if (!ok) { alert('Enter how many you ordered (more than 0).'); return; }
+    onAdd(row, add);
+    close();
+  };
+  const left = row.have + add - row.need;
+  return (
+    <Sheet title="Add an order" onClose={onClose} footer={(close) => (
+      <React.Fragment>
+        <button className="btn btn-ghost" onClick={close}>Cancel</button>
+        <button className="btn btn-primary" onClick={() => save(close)}>Add to stock</button>
+      </React.Fragment>
+    )}>
+      <div className="form-section">
+        <label>What did you order?</label>
+        <select value={key} onChange={e => pick(e.target.value)} aria-label="Inventory item">
+          {group('Roofline', ['line', 'bulb'])}
+          {group('Timers & clips', ['timer', 'clip'])}
+          {group('Mini lights (balls)', ['mini'])}
+        </select>
+        <label>How many {unit}?</label>
+        <input type="number" inputMode="numeric" min="1" step="1" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0" aria-label={`How many ${unit} you ordered`} />
+        <div className="stock-chips">
+          {(STOCK_STEPS[row.kind] || [1, 10, 100]).map(step => <button key={step} type="button" className="chip" onClick={() => plus(step)}>+{fmtQty(step)}</button>)}
+          {shortOf(row) > 0 && <button type="button" className="chip" onClick={() => setAmount(String(shortOf(row)))}>What you’re short: {fmtQty(shortOf(row))}</button>}
+        </div>
+        <div className="stock-preview">
+          On shelf <b>{fmtQty(row.have)}</b>{add > 0 ? <React.Fragment> → <b>{fmtQty(row.have + add)}</b></React.Fragment> : null}
+          {' · '}Needed <b>{fmtQty(row.need)}</b>
+          {' · '}<span className={left < 0 ? 'stock-short' : 'stock-ok'}>{left < 0 ? `${fmtQty(-left)} short` : `${fmtQty(left)} left`}</span>
+        </div>
+        <div className="hint">It’s added on top of your last count, so you don’t have to recount.</div>
+      </div>
+    </Sheet>
   );
 }
 
@@ -3160,7 +3512,7 @@ function DashboardTab({ jobs, techs, expenses, settings }) {
 }
 
 // ================= Settings =================
-function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, advances, paidWeeks, user, syncState, authError, signIn, signOut, onImport }) {
+function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDeleteTech, jobs, onEditJob, onDeleteJob, expenses, onEditExpense, onDeleteExpense, inventory, advances, paidWeeks, stockAdds, user, syncState, authError, signIn, signOut, onImport }) {
   const [themePref, setThemePref] = useState(getThemePref());
   const [commStr, setCommStr] = useState(String(settings.commissionPct));
   const [feeStr, setFeeStr] = useState(String(settings.cardFeePct));
@@ -3202,7 +3554,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
 
   const [importMsg, setImportMsg] = useState('');
   const exportBackup = () => {
-    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings, inventory, advances, paidWeeks };
+    const payload = { app: 'xmasLightsTracker', exportedAt: new Date().toISOString(), techs, jobs, expenses, settings, inventory, advances, paidWeeks, stockAdds };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -3399,7 +3751,7 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
         {backups.length === 0 ? <div className="hint">No backups yet.</div> : backups.map(b => (
           <div className="tech-row" key={b.day}>
             <div>
-              <div className="tech-name">{fmtDate(b.ts)}</div>
+              <div className="tech-name">{fmtDate(b.ts)}{b.label ? ' · ' + b.label : ''}</div>
               <div className="tech-meta">{(b.data.techs || []).length} techs · {(b.data.jobs || []).length} jobs · {(b.data.expenses || []).length} expenses{Array.isArray(b.data.inventory) ? ` · ${b.data.inventory.length} inventory items` : ''}</div>
             </div>
             <button className="btn btn-ghost btn-sm" onClick={() => { if (confirm('Restore this backup? It REPLACES all current data on every synced device.')) onImport(b.data); }}>Restore</button>
