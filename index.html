@@ -635,7 +635,9 @@ const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 
 // Jobs tab ("with lights" figures). It never reaches the Dashboard, which would count it twice.
 // inventoryAsOf: the count date for stock entered before counts were time-stamped (the user's first count was 2026-10-28).
 // shippingDays: business days an inventory order takes to arrive (for order-by dates).
-const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15, inventoryAsOf: '2026-10-28', shippingDays: 5 };
+// profitPayFrom: jobs installed on or after this day pay techs a % of the job's profit (revenue minus
+// the cost of its lights) instead of a % of revenue. The user switched on 2026-11-21; earlier jobs keep revenue.
+const DEFAULT_SETTINGS = { commissionPct: 20, cardFeePct: 3, lightCostPerFt: 1.5, miniLightCostPerBall: 12.5, bulbSpacingIn: 15, inventoryAsOf: '2026-10-28', shippingDays: 5, profitPayFrom: '2026-11-21' };
 
 // Labor under the retired hourly / per-foot pay model; only used to migrate old jobs.
 function legacyLabor(job) {
@@ -1006,14 +1008,24 @@ function computeJobFinancials(job, settings) {
   const revenue = Number(job.revenue) || 0;
   const misc = Number(job.miscCost) || 0;
 
-  // Each tech on the job earns their own % of the job's revenue. A tech with no % yet (data
-  // from an older version not converted) gets the even split of the job's old single %.
+  // The lights this job used (roofline feet plus mini light balls), at the Settings prices.
+  const feet = Number(job.feet) || 0;
+  const lightCostPerFt = Number(settings.lightCostPerFt) || 0;
+  const lightCost = feet * lightCostPerFt;
+  const mini = miniLightTotals(job, settings);
+  const lightsTotal = lightCost + mini.cost;
+
+  // Each tech on the job earns their own % of the job: of its profit (revenue minus its lights)
+  // for jobs installed on or after settings.profitPayFrom, of its revenue before that. Never below $0.
+  // A tech with no % yet (data from an older version not converted) gets the even split of the job's old single %.
+  const payOnProfit = paysOnProfit(job, settings);
+  const payBase = payOnProfit ? Math.max(0, revenue - lightsTotal) : revenue;
   const assigns = job.assignments || [];
   const techCount = assigns.length;
   const evenShare = techCount ? (Number(job.commissionPct != null ? job.commissionPct : settings.commissionPct) || 0) / techCount : 0;
   const shares = assigns.map(a => {
     const pct = a.pct != null ? Number(a.pct) || 0 : evenShare;
-    return { techId: a.techId, pct, amount: revenue * pct / 100 };
+    return { techId: a.techId, pct, amount: payBase * pct / 100 };
   });
   const commissionPct = shares.reduce((s, x) => s + x.pct, 0);
   const commissionPool = shares.reduce((s, x) => s + x.amount, 0);
@@ -1028,11 +1040,7 @@ function computeJobFinancials(job, settings) {
   const margin = revenue > 0 ? netProfit / revenue : 0;
 
   // Jobs-tab figures: the same plus the lights this job used, to show its true profit.
-  const feet = Number(job.feet) || 0;
-  const lightCostPerFt = Number(settings.lightCostPerFt) || 0;
-  const lightCost = feet * lightCostPerFt;
-  const mini = miniLightTotals(job, settings);
-  const costWithLights = totalCost + lightCost + mini.cost;
+  const costWithLights = totalCost + lightsTotal;
   const profitWithLights = revenue - costWithLights;
   const marginWithLights = revenue > 0 ? profitWithLights / revenue : 0;
 
@@ -1040,7 +1048,7 @@ function computeJobFinancials(job, settings) {
   shares.forEach(s => { payByTech[s.techId] = (payByTech[s.techId] || 0) + s.amount; });
 
   return {
-    commissionPct, commissionPool, shares, techCount, laborCost, cardFees,
+    commissionPct, commissionPool, shares, techCount, laborCost, cardFees, payOnProfit, payBase, lightsTotal,
     totalCost, netProfit, margin,
     feet, lightCostPerFt, lightCost, mini, costWithLights, profitWithLights, marginWithLights,
     payByTech,
@@ -1262,6 +1270,8 @@ const withoutPayment = (job, which) => {
 const isRealized = (job) => job.status === 'Completed' && jobPayments(job).fullyPaid;
 // Jobs saved before scheduling existed fall back to the date they were created.
 const scheduledOf = (job) => job.scheduledDate || (job.date ? job.date.slice(0, 10) : '');
+// Is this job's commission a % of profit (installed on or after the switch day) rather than of revenue?
+const paysOnProfit = (job, settings) => { const from = settings && settings.profitPayFrom; const day = scheduledOf(job); return !!from && !!day && day >= from; };
 
 // A customer tip goes to the crew, not the business: it's split evenly between the job's
 // techs and is never counted as revenue, cost or profit.
@@ -2479,7 +2489,9 @@ function WeeklyPayouts({ jobs, allTechs, settings, advances, paidWeeks, onAddAdv
                   <div className="payout-job" key={job.id}>
                     <b>{job.customer}</b> · {fmtDateOnly(scheduledOf(job))}
                     {owed > 0 && <span className="badge badge-owed" style={{ marginLeft: 6 }}>Customer owes {fmtMoney(owed)}</span>}
-                    <div>{fmtMoney2(job.revenue)} job · {pct2(calc.commissionPct)}% commission = {fmtMoney2(calc.commissionPool)}</div>
+                    <div>{calc.payOnProfit
+                      ? `${fmtMoney2(calc.payBase)} profit (${fmtMoney2(job.revenue)} job − ${fmtMoney2(calc.lightsTotal)} lights) · ${pct2(calc.commissionPct)}% commission = ${fmtMoney2(calc.commissionPool)}`
+                      : `${fmtMoney2(job.revenue)} job · ${pct2(calc.commissionPct)}% commission = ${fmtMoney2(calc.commissionPool)}`}</div>
                     <div>{calc.shares.map(s => `${nameOf(s.techId)} ${pct2(s.pct)}% = ${fmtMoney2(s.amount)}`).join(' · ')}</div>
                     {tipOf(job) > 0 && (
                       <div>🎁 {fmtMoney2(tipOf(job))} tip, split evenly: {Object.entries(tips).map(([id, amt]) => `${nameOf(id)} ${fmtMoney2(amt)}`).join(' · ')}</div>
@@ -2555,7 +2567,7 @@ function TechModal({ tech, onClose, onSave }) {
         <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="e.g. Mike Johnson" autoFocus
           onKeyDown={e => { if (e.key === 'Enter') save(); }} />
         <div className="hint" style={{ marginTop: 10 }}>
-          Techs earn a commission % of each job they work, plus an even share of any customer tip on it. You set each tech's % on the job; new jobs start with your default from Settings, split evenly.
+          Techs earn a commission % of each job they work (of the job's profit, meaning its revenue minus the cost of its lights), plus an even share of any customer tip on it. You set each tech's % on the job; new jobs start with your default from Settings, split evenly.
         </div>
       </div>
     </Sheet>
@@ -2891,6 +2903,8 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
     miscCost: Number(miscCost) || 0,
     assignments: assignments.map(a => ({ techId: a.techId, pct: a.pct })),
     miniLights,
+    // The install day decides whether techs are paid on profit or on revenue (settings.profitPayFrom).
+    scheduledDate, date: job.date,
     ...payFields,
   };
   const calc = computeJobFinancials(previewJob, settings);
@@ -3161,8 +3175,15 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
           {calc.techCount === 0
             ? `No techs assigned yet, so no commission is counted. Techs you add start with your ${defaultPct}% default, split evenly; then change anyone's %.`
             : <React.Fragment>
-                Commission: <b>{pct2(calc.commissionPct)}%</b> of {fmtMoney2(previewJob.revenue)} = <b>{fmtMoney2(calc.commissionPool)}</b>.
-                {' '}Each tech's % is of the whole job's revenue.
+                {calc.payOnProfit
+                  ? <React.Fragment>
+                      Commission: <b>{pct2(calc.commissionPct)}%</b> of {fmtMoney2(calc.payBase)} profit ({fmtMoney2(previewJob.revenue)} job − {fmtMoney2(calc.lightsTotal)} lights) = <b>{fmtMoney2(calc.commissionPool)}</b>.
+                      {' '}Each tech's % is of the job's profit: its revenue minus the cost of its lights.
+                    </React.Fragment>
+                  : <React.Fragment>
+                      Commission: <b>{pct2(calc.commissionPct)}%</b> of {fmtMoney2(previewJob.revenue)} = <b>{fmtMoney2(calc.commissionPool)}</b>.
+                      {' '}Each tech's % is of the whole job's revenue (jobs installed before {fmtDateOnly(settings.profitPayFrom)} are paid on revenue).
+                    </React.Fragment>}
               </React.Fragment>}
         </div>
         {calc.techCount > 1 && (
@@ -3195,7 +3216,7 @@ function JobModal({ job, techs, settings, inventory, onClose, onSave }) {
         </div>
 
         <div className="summary-box">
-          <div className="row"><span className="lab">Commission ({pct2(calc.commissionPct)}%{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
+          <div className="row"><span className="lab">Commission ({pct2(calc.commissionPct)}%{calc.payOnProfit ? ' of profit' : ''}{calc.techCount ? `, ${calc.techCount} ${calc.techCount === 1 ? 'tech' : 'techs'}` : ', no techs'})</span><span>{fmtMoney2(calc.commissionPool)}</span></div>
           <div className="row"><span className="lab">Card fees</span><span>{fmtMoney2(calc.cardFees)}</span></div>
           <div className="row"><span className="lab">Misc / materials</span><span>{fmtMoney2(previewJob.miscCost)}</span></div>
           <div className="row"><span className="lab">Lights ({calc.feet.toLocaleString()} ft × ${calc.lightCostPerFt.toFixed(2)})</span><span>{fmtMoney2(calc.lightCost)}</span></div>
@@ -3545,6 +3566,15 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
   };
   const backups = lsGet(BACKUP_KEY, []).slice().reverse();
 
+  // Moving the profit-pay switch day changes pay on completed jobs that fall between the old and new day.
+  const setProfitFrom = (text) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) { alert('Pick the first install day that pays on profit.'); return false; }
+    const next = { ...settings, profitPayFrom: text };
+    const flips = jobs.filter(j => j.status === 'Completed' && paysOnProfit(j, settings) !== paysOnProfit(j, next)).length;
+    if (flips && !confirm(`This changes the pay on ${flips} completed job${flips === 1 ? '' : 's'}. Change it?`)) return false;
+    setSettings(s => ({ ...s, profitPayFrom: text }));
+    toast('Profit pay date saved');
+  };
   const saveCommission = () => {
     const v = Number(commStr);
     if (commStr === '' || isNaN(v) || v < 0 || v > 100) { alert('Enter a commission between 0 and 100%.'); setCommStr(String(settings.commissionPct)); return; }
@@ -3661,13 +3691,20 @@ function SettingsTab({ settings, setSettings, techs, onAddTech, onEditTech, onDe
 
       <div className="card">
         <div className="section-title">Tech Commission</div>
-        <label>Starting Commission per Job (% of job revenue)</label>
+        <label>Starting Commission per Job (% of job profit)</label>
         <div className="field-group">
           <input type="number" inputMode="decimal" min="0" max="100" step="0.5" value={commStr}
             onChange={e => setCommStr(e.target.value)} onBlur={saveCommission} />
           <button className="btn btn-primary" style={{ flex: '0 0 auto' }} onClick={saveCommission}>Save</button>
         </div>
-        <div className="hint">When you add techs to a job, this % of the job's revenue is split evenly between them as a starting point. Then set any tech's own % on that job. Each job keeps the %s it was saved with, so changing this only affects jobs you set up afterwards.</div>
+        <div className="hint">When you add techs to a job, this % is split evenly between them as a starting point. Then set any tech's own % on that job. Each job keeps the %s it was saved with, so changing this only affects jobs you set up afterwards.</div>
+        <div className="hint">
+          <b>Profit</b> here is the job's revenue minus the cost of its lights: its feet × {fmtMoney2(settings.lightCostPerFt)} plus its mini light balls × {fmtMoney2(settings.miniLightCostPerBall)} (set under Light Costs).
+          Card fees and misc costs don't come out of it.
+        </div>
+        <label style={{ marginTop: 12 }}>Paid on profit for jobs installed on or after</label>
+        <CommitInput type="date" value={settings.profitPayFrom || ''} aria-label="Paid on profit starting" onCommit={setProfitFrom} />
+        <div className="hint">Jobs installed before this date were paid a % of their revenue and stay that way.</div>
       </div>
 
       <div className="card">
